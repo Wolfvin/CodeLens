@@ -60,6 +60,10 @@ AUTH_MIDDLEWARE_PATTERNS = {
     "authenticate", "auth", "jwt", "passport", "requireAuth",
     "isAuthenticated", "verifyToken", "checkAuth", "ensureAuthenticated",
     "login_required", "permission_required", "auth_required",
+    # v6.5 (issue #214): JS camelCase permission middleware — must classify as auth
+    # so that router.use(requirePermission('admin')) bumps auth_protected count.
+    "requirepermission", "haspermission", "checkpermission",
+    "verifypermission", "ensurepermission",
 }
 
 CORS_MIDDLEWARE_PATTERNS = {
@@ -83,6 +87,40 @@ def _is_test_file(file_path: str) -> bool:
     test_patterns = ['.test.', '.spec.', '__tests__/', '/test/', '/tests/',
                      '_test.', '_spec.', '.e2e.']
     return any(p in lower for p in test_patterns)
+
+
+# v6.5 (issue #214): shared Router() instance detection — used by both
+# _extract_js_routes (for prefix application) and _extract_js_middleware
+# (for router-scoped middleware attachment). Previously inline in
+# _extract_js_routes only, which left _extract_js_middleware unable to
+# recognise <routerVar>.use(mw) patterns.
+_ROUTER_ASSIGNMENT_RE = re.compile(
+    r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?'
+    r'(?:(\w+)\s*\.\s*)?'           # optional receiver: express, koa, etc.
+    r'(?:Router|router)\s*\(([^)]*)\)'
+)
+
+
+def _detect_router_vars(content: str) -> Dict[str, str]:
+    """Detect ``Router()`` assignments and return ``{var_name: prefix}``.
+
+    Matches the common Express / Koa patterns:
+        const router = Router({ prefix: '/api' })
+        let accountingRouter = express.Router()
+        var adminRouter = new Router()
+
+    The optional receiver (e.g. ``express`` in ``express.Router()``) is
+    accepted but not stored — only the variable name matters for scoping
+    middleware to that router instance.
+    """
+    router_vars: Dict[str, str] = {}
+    for m in _ROUTER_ASSIGNMENT_RE.finditer(content):
+        var_name = m.group(1)
+        args = m.group(3) or ""
+        prefix_match = re.search(r'prefix\s*:\s*[\'"]([^\'"]+)[\'"]', args)
+        prefix = prefix_match.group(1) if prefix_match else ""
+        router_vars[var_name] = prefix
+    return router_vars
 
 
 def map_api_routes(
@@ -153,11 +191,17 @@ def map_api_routes(
 
             # ─── Express / Koa / Hono / Fastify ──────────────
             if ext in {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}:
-                js_routes = _extract_js_routes(content, rel_path, frameworks_detected)
+                # v6.5 (issue #214): detect Router() instances once, share with
+                # both _extract_js_routes (for prefix + router_var tagging) and
+                # _extract_js_middleware (for router-scoped .use() attachment).
+                router_vars = _detect_router_vars(content)
+                js_routes = _extract_js_routes(
+                    content, rel_path, frameworks_detected, router_vars
+                )
                 routes.extend(js_routes)
 
-                # Detect global middleware
-                mw = _extract_js_middleware(content, rel_path)
+                # Detect global + router-scoped middleware
+                mw = _extract_js_middleware(content, rel_path, router_vars)
                 global_middleware.extend(mw)
 
             # ─── Next.js API Routes ───────────────────────────
@@ -350,6 +394,20 @@ def map_api_routes(
                     "file": mw["file"],
                     "line": mw["line"],
                 })
+        elif scope.startswith("router:"):
+            # v6.5 (issue #214): router-instance-scoped middleware — attach
+            # ONLY to routes registered via the same router variable.
+            # accountRouter.use(authMiddleware) must NOT leak to routes on
+            # userRouter or to top-level app.get/post routes.
+            router_var = scope.split(":", 1)[1]
+            for route in routes:
+                if route.get("router_var") == router_var:
+                    route.setdefault("middleware_chain", []).append({
+                        "name": mw["name"],
+                        "type": mw.get("type", "unknown"),
+                        "file": mw["file"],
+                        "line": mw["line"],
+                    })
 
     # Build middleware map
     for route in routes:
@@ -434,9 +492,23 @@ def map_api_routes(
 # ─── JS Route Extraction ───────────────────────────────────────
 
 def _extract_js_routes(
-    content: str, rel_path: str, frameworks: Set[str]
+    content: str,
+    rel_path: str,
+    frameworks: Set[str],
+    router_vars: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Extract routes from Express / Fastify / Koa / Hono JS/TS files."""
+    """Extract routes from Express / Fastify / Koa / Hono JS/TS files.
+
+    ``router_vars`` maps Router() instance variable names to their optional
+    prefix (e.g. ``{"accountingRouter": "/api/accounting"}``). It is used to
+    (a) apply path prefixes to routes registered on that router, and
+    (b) tag each route with the ``router_var`` it was registered via — which
+    lets router-scoped middleware (``accountingRouter.use(authMiddleware)``)
+    be attached to exactly the right routes in post-processing.
+
+    When ``router_vars`` is ``None`` (e.g. legacy direct callers/tests), it
+    is detected inline via :func:`_detect_router_vars`.
+    """
     routes = []
     lines = content.split('\n')
 
@@ -455,26 +527,19 @@ def _extract_js_routes(
     if is_hono:
         frameworks.add("hono")
 
-    # Track current router variable names and prefixes
-    router_vars: Dict[str, str] = {}  # var_name → prefix
-
-    # Detect Router() assignments: const router = Router({ prefix: '/api' })
-    for m in re.finditer(
-        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+)?(?:Router|router)\s*\(([^)]*)\)',
-        content
-    ):
-        var_name = m.group(1)
-        args = m.group(2)
-        prefix_match = re.search(r'prefix\s*:\s*[\'"]([^\'"]+)[\'"]', args)
-        prefix = prefix_match.group(1) if prefix_match else ""
-        router_vars[var_name] = prefix
+    # v6.5 (issue #214): router_vars is normally passed in by the caller
+    # (map_api_routes), which shares it with _extract_js_middleware. Fall
+    # back to inline detection for backward compat with any direct callers.
+    if router_vars is None:
+        router_vars = _detect_router_vars(content)
 
     # Detect app.route('/path') chains
     for m in re.finditer(
-        r'(?:app|router|server|fastify|hono)\s*\.\s*route\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+        r'(app|router|server|fastify|hono)\s*\.\s*route\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
         content
     ):
-        base_path = m.group(1)
+        receiver = m.group(1)
+        base_path = m.group(2)
         line_num = content[:m.start()].count('\n') + 1
         # Look for chained methods after this
         chain_start = m.end()
@@ -491,6 +556,9 @@ def _extract_js_routes(
                 "request_type": None,
                 "response_type": None,
                 "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+                # v6.5 (issue #214): record receiver so router-scoped
+                # middleware on `app`/`server`/etc can be attached.
+                "router_var": receiver,
             })
 
     # Direct method calls: app.get('/path', ...), router.post('/path', ...)
@@ -537,6 +605,10 @@ def _extract_js_routes(
             "request_type": req_type,
             "response_type": resp_type,
             "framework": _detect_js_framework(is_express, is_fastify, is_koa, is_hono),
+            # v6.5 (issue #214): record which variable received the .get/.post
+            # call so router-scoped `.use()` middleware can be attached to
+            # exactly these routes (not all routes, not routes on other routers).
+            "router_var": obj_name,
         })
 
     return routes
@@ -715,44 +787,57 @@ def _detect_request_response_types(
 
 # ─── JS Middleware Extraction ──────────────────────────────────
 
-def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
-    """Extract global/app-level middleware from JS files."""
+def _extract_js_middleware(
+    content: str,
+    rel_path: str,
+    router_vars: Optional[Dict[str, str]] = None,
+) -> List[Dict]:
+    """Extract global/app-level and router-scoped middleware from JS files.
+
+    Three scope types are emitted:
+
+    * ``"global"`` — middleware attached via ``app.use(mw)`` /
+      ``server.use(mw)`` / ``fastify.use(mw)`` / ``hono.use(mw)``. Attached
+      to every route in post-processing.
+    * ``"router:<var>"`` — middleware attached via ``<routerVar>.use(mw)``
+      where ``<routerVar>`` is a variable previously bound to a ``Router()``
+      call (e.g. ``accountingRouter.use(authMiddleware)``). Attached only
+      to routes registered via the same router variable (issue #214).
+    * ``"path:<path>"`` — middleware attached via ``app.use('/path', mw)``.
+      Currently collected but not auto-attached to per-route chains
+      (pre-existing gap; out of scope for #214).
+
+    ``router_vars`` is normally supplied by :func:`map_api_routes` so that
+    route extraction and middleware extraction share the same Router()
+    detection. When ``None`` (legacy direct callers), it is detected
+    inline via :func:`_detect_router_vars`.
+    """
     middleware = []
     lines = content.split('\n')
+
+    if router_vars is None:
+        router_vars = _detect_router_vars(content)
+
+    # Receivers that mean "the global application instance" — anything that
+    # matches these in a `.use(mw)` call is treated as global middleware.
+    _GLOBAL_RECEIVERS = {"app", "server", "fastify", "hono"}
 
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # app.use(middleware) patterns
+        # <receiver>.use(middleware) — no path argument
+        # Captures any identifier as receiver; scope is decided below based
+        # on whether the receiver is the global app, a known Router() var,
+        # or something we should skip (NON_ROUTER_OBJECTS, unknown vars).
         m = re.match(
-            r'(?:app|server|fastify|hono)\s*\.\s*use\s*\(\s*(\w+)',
+            r'(\w+)\s*\.\s*use\s*\(\s*(\w+)',
             stripped
         )
         if m:
-            mw_name = m.group(1)
+            receiver = m.group(1)
+            mw_name = m.group(2)
             mw_type = _classify_middleware(mw_name)
-            middleware.append({
-                "name": mw_name,
-                "type": mw_type,
-                "scope": "global",
-                "file": rel_path,
-                "line": i + 1,
-            })
-
-        # app.use('/path', middleware) — route-scoped middleware
-        m = re.match(
-            r'(?:app|server|fastify|hono)\s*\.\s*use\s*\(\s*[\'"`]([^\'"`]+)[\'"`]\s*,\s*(\w+)',
-            stripped
-        )
-        if m:
-            mw_path = m.group(1)
-            # Only treat as route-scoped middleware if the path looks like a real route
-            # (starts with /) — filter out cookie names, variable names, etc.
-            if not mw_path.startswith('/'):
-                # Might be a config string (e.g., cookie secret), not a route path
-                # Treat as global middleware instead
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
+            if receiver in _GLOBAL_RECEIVERS:
                 middleware.append({
                     "name": mw_name,
                     "type": mw_type,
@@ -760,16 +845,71 @@ def _extract_js_middleware(content: str, rel_path: str) -> List[Dict]:
                     "file": rel_path,
                     "line": i + 1,
                 })
-            else:
-                mw_name = m.group(2)
-                mw_type = _classify_middleware(mw_name)
+            elif receiver in NON_ROUTER_OBJECTS:
+                # e.g. obj.use(...) where obj is a known non-router — skip
+                pass
+            elif receiver in router_vars:
+                # v6.5 (issue #214): router-instance-scoped middleware.
+                # e.g. accountingRouter.use(authMiddleware) — attach only
+                # to routes registered via accountingRouter.get/post/...
                 middleware.append({
                     "name": mw_name,
                     "type": mw_type,
-                    "scope": f"path:{mw_path}",
+                    "scope": f"router:{receiver}",
                     "file": rel_path,
                     "line": i + 1,
                 })
+            # else: unknown receiver — be conservative, skip (avoids false
+            # positives from arbitrary foo.use(bar) calls in user code).
+
+        # <receiver>.use('/path', middleware) — path-scoped middleware
+        m = re.match(
+            r'(\w+)\s*\.\s*use\s*\(\s*[\'"`]([^\'"`]+)[\'"`]\s*,\s*(\w+)',
+            stripped
+        )
+        if m:
+            receiver = m.group(1)
+            mw_path = m.group(2)
+            mw_name = m.group(3)
+            mw_type = _classify_middleware(mw_name)
+            # Only treat as route-scoped middleware if the path looks like a real route
+            # (starts with /) — filter out cookie names, variable names, etc.
+            if not mw_path.startswith('/'):
+                # Might be a config string (e.g., cookie secret), not a route path
+                # Treat as global middleware instead — but only if receiver is one
+                # of the canonical global app names. Router vars with a config
+                # string arg are skipped (rare, not in scope for #214).
+                if receiver in _GLOBAL_RECEIVERS:
+                    middleware.append({
+                        "name": mw_name,
+                        "type": mw_type,
+                        "scope": "global",
+                        "file": rel_path,
+                        "line": i + 1,
+                    })
+            else:
+                if receiver in _GLOBAL_RECEIVERS:
+                    middleware.append({
+                        "name": mw_name,
+                        "type": mw_type,
+                        "scope": f"path:{mw_path}",
+                        "file": rel_path,
+                        "line": i + 1,
+                    })
+                elif receiver in router_vars:
+                    # v6.5 (issue #214): router-scoped path middleware —
+                    # e.g. accountingRouter.use('/reports', auditLogger).
+                    # Stored as router-path:<var>:<path> for future per-route
+                    # attachment; currently not auto-attached (same gap as
+                    # path: scope above), but tracked in middleware_map.
+                    middleware.append({
+                        "name": mw_name,
+                        "type": mw_type,
+                        "scope": f"router-path:{receiver}:{mw_path}",
+                        "file": rel_path,
+                        "line": i + 1,
+                    })
+                # else: unknown receiver — skip (conservative).
 
     return middleware
 
