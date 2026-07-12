@@ -8,10 +8,15 @@ Umbrella command that absorbs:
 
 Default mode is **semantic** (find symbols by meaning). Switch via --mode:
 
-    codelens search <workspace> "google auth"                    # semantic
-    codelens search <workspace> "google auth" --mode symbol      # exact name
-    codelens search <workspace> "google auth" --mode regex       # regex code
-    codelens search <workspace> "MATCH (n) WHERE n.id CONTAINS x" --mode graph
+    codelens search "google auth" <workspace>                    # semantic
+    codelens search "google auth" <workspace> --mode symbol      # exact name
+    codelens search "google auth" <workspace> --mode regex       # regex code
+    codelens search "MATCH (n) WHERE n.id CONTAINS x" <workspace> --mode graph
+
+NOTE: pattern comes FIRST, workspace SECOND — opposite of every other umbrella
+command (audit/deps/context/security all take workspace first). Getting this
+backwards does not error: the workspace path silently becomes the search
+pattern and returns an empty "ok" result.
 
 For raw Cypher pass-through (power user), prefer ``codelens graph <query>``.
 
@@ -40,10 +45,14 @@ def add_args(parser):
         "  graph     Cypher-subset graph query (MATCH/WHERE/RETURN/LIMIT)\n"
         "\n"
         "Examples:\n"
-        "  codelens search . \"google auth\"                    # semantic (default)\n"
-        "  codelens search . \"google auth\" --mode symbol      # exact symbol\n"
-        "  codelens search . \"handleChange\" --mode regex       # regex code search\n"
-        "  codelens search . \"MATCH (n) WHERE n.id CONTAINS x\" --mode graph\n"
+        "  codelens search \"google auth\" .                    # semantic (default)\n"
+        "  codelens search \"google auth\" . --mode symbol      # exact symbol\n"
+        "  codelens search \"handleChange\" . --mode regex       # regex code search\n"
+        "  codelens search \"MATCH (n) WHERE n.id CONTAINS x\" . --mode graph\n"
+        "\n"
+        "NOTE: pattern first, workspace second (opposite of other umbrellas).\n"
+        "Wrong order does not error — it silently searches for the workspace\n"
+        "path as the pattern and returns an empty result.\n"
         "\n"
         "For raw Cypher pass-through, prefer ``codelens graph <query>``."
     )
