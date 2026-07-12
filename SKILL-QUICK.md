@@ -2,192 +2,151 @@
 
 **MUST activate before writing/editing/deleting any class, id, or function.**
 
-> Read THIS FILE FIRST. All commands: auto-detect workspace, auto-setup, smart `--top 20`, `--lite`, `--max-tokens N`, `--format ai`, `--format compact` (issue #17).
+> Read THIS FILE FIRST. All commands: auto-detect workspace, auto-setup, `--lite`, `--max-tokens N`, `--format ai`, `--format compact`.
+>
+> **Architecture note:** CodeLens consolidated ~78 legacy commands into **12 umbrella commands**, each with `--check <sub-mode>`. If you remember standalone `query`/`trace`/`dead-code`/`secrets`/`init`/`serve`/`guard` — those no longer exist as top-level commands. See [SKILL.md](SKILL.md#architecture--read-this-first-if-you-know-an-older-codelens) for the full old→new mapping.
 
 ## Zero-Config Usage
 
 ```bash
-CLI="python3 /path/to/codelens/scripts/codelens.py"
-export CODELENS_AI_MODE=1           # Optional: --format ai becomes default
-$CLI query "myFunction" --lite                              # → {found, action}
-$CLI smell                                                  # → Auto --top 20, sorted by severity
-$CLI complexity --top 5 --lite                              # → Top 5 most complex, minimal output
-$CLI trace "main" --direction down --format compact         # → token-efficient single-char keys (issue #17)
-$CLI graph-schema                                           # → graph shape: nodes/edges/types in ~50 bytes (issue #17)
-$CLI list --limit 5 --offset 10 --format compact            # → paginated + compact
+export CODELENS_AI_MODE=1                                          # Optional: --format ai becomes default
+codelens search "myFunction" . --mode symbol --lite                # → symbol status + ref count
+codelens audit . --check smell --lite                              # → health_score, top findings by severity
+codelens audit . --check complexity --top 5 --lite                 # → top 5 most complex, minimal output
+codelens context . --check trace --name main --direction down --format compact
+codelens api-map . --check graph-schema                            # → graph shape: nodes/edges/types in ~50 bytes
+codelens search "pattern" . --mode regex --limit 5 --offset 10 --format compact
 ```
 
-**Auto-setup** caps at 3000 files to prevent timeout. For full analysis: `$CLI scan` manually.
+**Auto-setup** caps at 3000 files to prevent timeout. For full analysis: `codelens scan` manually (no cap).
 
-## AI Flags (work with ANY command)
+## AI Flags (work with every command)
 
 | Flag | Effect |
-|------|--------|
-| `--top N` | Limit list to N items (sorts by relevance: severity/complexity). Smart default: 20. Override: `--top 0` unlimited |
+|---|---|
+| `--top N` | Limit list to N items (sorts by relevance: severity/complexity) |
 | `--lite` | Command-specific minimal output (see table below) |
 | `--max-tokens N` | Auto-truncate to fit ~N tokens |
 | `--format ai` | Normalized: `{stats, items[], truncated, recommendations}` |
-| `--format compact` | Token-efficient: single-char keys + abbreviated types (issue #17). ~50% smaller than `json`. Best for high-volume MCP tool calls |
-| `--format sarif` | SARIF v2.1.0 output for GitHub Advanced Security / VS Code |
-| `--format graphml` | GraphML 1.0 XML for graph-producing commands (`scan`, `trace`, `impact`, `circular`). Opens in Gephi/Cytoscape/yEd/Neo4j. Other commands emit a single-node placeholder (issue #59 Phase 3) |
-| `--limit N` / `--offset N` | Pagination on list-type commands (`list`, `search`, `trace`, `symbols`, `outline`). Default limit=20 (issue #17). `--top N` is an alias for `--limit N --offset 0` |
-| `--deep` | Enable LSP-enhanced deep analysis (requires language server; check with `lsp-status`) |
-| `--db-path PATH` | Custom SQLite database path (default: `.codelens/codelens.db`) |
-| `--diff-base REF` | Git ref (branch/tag/SHA/`HEAD~1`) to diff against. Only findings from files changed relative to REF are reported. Empty diff → early exit. Useful for CI PR checks. Works on all analysis commands (issue #157) |
+| `--format compact` | Single-char keys + abbreviated types, ~50% smaller than `json`. Best for high-volume MCP calls |
+| `--format sarif` | SARIF v2.1.0 for GitHub Advanced Security / VS Code |
+| `--format graphml` | GraphML 1.0 XML for graph-producing commands (`scan`, `context --check trace`, `impact`, `deps --check circular`). Opens in Gephi/Cytoscape/yEd/Neo4j |
+| `--limit N` / `--offset N` | Pagination on list-type results. Default limit=20 |
+| `--deep` | LSP-enhanced deep analysis (requires a language server; check with `doctor --check lsp-status`) |
+| `--db-path PATH` | Custom SQLite database path (default `.codelens/codelens.db`) |
+| `--diff-base REF` | Git ref to diff against — only findings from changed files reported (pre-filter, useful for CI PR checks) |
 
 ### Lite Mode Per Command
 
 | Command | `--lite` returns |
-|---------|------------------|
-| `query` | `{status, found, action, action_reason}` |
-| `impact` / `refactor-safe` | `{status, risk, action}` |
-| `smell` | `{health_score, total_findings, action, top_findings[], stats}` |
-| `complexity` | `{stats, top_complex[], high_complexity_count}` |
-| `dead-code` | `{removal_safety, recommended_action, stats, top_items[], total_dead}` |
-| `debug-leak` | `{stats, top_leaks[], leaks_total}` |
-| `perf-hint` | `{risk, stats, top_hints[], hints_total}` |
-| `secrets` | `{risk, action, stats, top_findings[]}` |
-| `a11y` / `css-deep` / `regex-audit` | `{risk, stats, top_items[], recommendations[]}` |
-| `vuln-scan` | `{risk, stats, findings[], osv_stats, cache_info{last_refresh, age_hours, ttl_hours, is_stale, stale_packages[]}, recommendations[]}` — `cache_info.is_stale` tells agents whether to re-run with `--refresh` (issue #30) |
-| `taint` | `{status, stats, top_violations[], recommendations[]}` |
-| `guard` | `{status, risk, action, blocked_reason?}` |
-| `check` | `{status, exit_code, total_findings, critical_count}` |
-| Other | `{status, stats, top 5 items, recommendations}` |
+|---|---|
+| `impact --check impact` / `--check diff` | `{status, risk, action}` |
+| `audit --check smell` | `{status, health_score, total_findings, action, top_findings[], stats}` |
+| `audit --check complexity` | `{status, stats, top_complex[], high_complexity_count}` |
+| `audit --check dead-code` | `{status, removal_safety, recommended_action, stats, top_items[], total_dead}` |
+| `security --check secrets` | `{status, risk, action, stats, top_findings[]}` |
+| `security --check taint` | `{status, risk, stats, top_findings[], recommendations}` |
+| `security --check vuln-scan` | `{status, risk, stats, findings[], recommendations}` |
+| `summary` | `{status, workspace, identity, frameworks, recommendations, findings[]}` — each finding's items capped to 3 |
+| `history` | `{status, workspace, snapshots, latest{...}, trends, deltas}` |
+| Other | generic fallback: `{status, stats, top 5 items, recommendations}` |
 
-## Query Decision Rules
+## Search Decision Rules
 
-| Result | Action |
-|--------|--------|
-| `found: false` | CREATE — safe to write new |
-| `found: true` + `active` | EXTEND — don't overwrite |
-| `found: true` + `dead` | ASK user — reuse or delete? |
-| `found: true` + `duplicate_ref` | LIST_FIRST — show all referrers |
-| `found: true` + `collision` | STOP — active bug, fix first |
+| `search --mode symbol` result | Action |
+|---|---|
+| not found | CREATE — safe to write new |
+| found + `active` | EXTEND — don't overwrite |
+| found + `dead` | ASK user — reuse or delete? (cross-check with `trace` first) |
+| found + `duplicate_ref` | LIST_FIRST — show all referrers |
+| found + `collision` | STOP — active bug, fix first |
 
 ## Trigger Map
 
 | Intent | Command |
-|--------|---------|
-| Create/edit/delete code | `query` → write → `scan --incremental` |
-| "what changed?" | `diff --git-aware` |
-| "do I need to re-scan?" | `git-status` |
-| "does this exist?" | `query --lite` |
-| "who calls this?" | `trace --direction up` |
-| "safe to delete?" | `impact` → `dead-code` |
-| "safe to rename?" | `refactor-safe` |
-| "production ready?" | `smell` → `complexity` → `debug-leak` → `secrets` |
-| "security audit" | `secrets` → `dataflow` → `env-check` → `vuln-scan` |
-| "are CVE results fresh?" | `vuln-scan` → check `cache_info.is_stale` → if stale, re-run `vuln-scan --refresh` or `vuln-scan --max-age 6h` (issue #30) |
-| "taint analysis" | `taint` (AST) or `dataflow` (cross-file) |
-| "what to refactor?" | `smell` |
-| "too complex?" | `complexity` |
-| "performance?" | `perf-hint` → `circular` |
-| "cleanup before deploy" | `debug-leak` → `dead-code` → `secrets` |
-| "CSS issues?" | `css-deep` → `missing-refs` |
-| "accessible?" | `a11y` |
-| "project overview" | `architecture --lite` (single call, <1k tokens) or `summary` / `handbook` (deeper) |
-| "fix automatically" | `fix --apply` (dry-run by default) |
-| "show dashboard" | `dashboard` |
-| "trend over time" | `history` |
-| "run everything" | `analyze` |
+|---|---|
+| Create/edit/delete code | `search --mode symbol` → write → `scan --incremental` |
+| "what changed?" | `impact --check diff` |
+| "do I need to re-scan?" | `history --check git-status` |
+| "does this exist?" | `search --mode symbol --lite` |
+| "who calls this?" | `context --check trace --direction up` |
+| "safe to delete?" | `impact --check impact` → `audit --check dead-code` |
+| "production ready?" | `audit --check smell` → `audit --check complexity` → `security --check secrets` |
+| "security audit" | `security --check secrets` → `impact --check dataflow` → `security --check vuln-scan` |
+| "taint analysis" | `security --check taint` (AST, single-file) or `impact --check dataflow` (cross-file) |
+| "what to refactor?" | `audit --check smell` |
+| "too complex?" | `audit --check complexity` |
+| "performance?" | `audit --check perf-hint` → `deps --check circular` |
+| "cleanup before deploy" | `audit --check dead-code` → `security --check secrets` |
+| "project overview" | `context` (10-second orient, default sub-mode) or `summary --lite` (findings digest) |
 | "CI/CD gate" | `check --severity high` |
-| "manage plugins" | `plugin list` / `plugin install` |
-| "MCP server" | `serve` |
-| "pre/post-write hook" | `guard --pre` / `guard --post` |
-| "don't know which command" | `ask "question"` |
-| "LSP servers available?" | `lsp-status` (issue #33: `--lsp-status` top-level flag is an alias — both produce the identical payload, and the MCP `codelens_lsp_status` tool uses the same subcommand path) |
+| "manage plugins" | `plugin list` |
+| "structural query in one call" | `search --mode graph` (Cypher subset) or `graph "cypher"` for raw power-user queries |
+| "LSP servers available?" | `doctor --check lsp-status` |
+| "share graph with teammate" | `deps --check export-snapshot` → they run `deps --check import-snapshot` |
 
 ### Disambiguation
 
 | You want | Use | Not |
-|----------|-----|-----|
-| "Name exists?" | `query` | `symbols` (query checks status+action) |
-| "Who calls?" | `trace` | `context` (trace goes deep) |
-| "Quick symbol info" | `context` | `trace` (context is 1-level) |
-| "Find text in code" | `search` | `symbols` (search is regex on files) |
-| "Quality check" | `smell` | `complexity` (smell = 10 categories) |
-| "Complexity score" | `complexity` | `smell` (complexity = metrics) |
-| "Pre-delete check" | `impact` | `dead-code` (impact shows breakage) |
-| "Find unused code" | `dead-code` | `impact` (dead-code finds unused) |
-| "Security in my code" | `secrets` | `vuln-scan` (vuln-scan checks deps) |
-| "Dependency CVEs" | `vuln-scan` | `secrets` (secrets finds hardcoded) |
-| "Project identity" | `handbook` | `summary` (summary = findings) |
-| "AST taint (precise)" | `taint` | `dataflow` (dataflow is cross-file, regex-aware) |
-| "Cross-file taint" | `dataflow` | `taint` (taint is single-file, AST-deep) |
-| "Auto-fix issues" | `fix` | `check` (check just gates, doesn't fix) |
+|---|---|---|
+| "Name exists?" | `search --mode symbol` | `search --mode semantic` (fuzzy-by-meaning, not exact) |
+| "Who calls X, transitively?" | `context --check trace --direction up` | `context --check context` (single-level) |
+| "Quick symbol info" | `context --check context --name X` | `context --check trace` (trace goes multi-level deep) |
+| "Find literal text/regex in code" | `search --mode regex` | `search --mode symbol` (symbol is exact-name lookup, not free text) |
+| "Quality check" | `audit --check smell` | `audit --check complexity` (smell = multi-category, complexity = one metric) |
+| "Pre-delete check" | `impact --check impact` | `audit --check dead-code` (impact shows blast radius; dead-code shows current unused status) |
+| "Security in my code" | `security --check secrets` | `security --check vuln-scan` (vuln-scan checks dependency CVEs, not your code) |
+| "Dependency CVEs" | `security --check vuln-scan` | `security --check secrets` (secrets finds hardcoded keys) |
+| "Auto-fix issues" | not available — CodeLens finds, it doesn't auto-fix | `check` (gates CI, doesn't fix) |
 
-## All 12 Commands
+## The 12 Umbrella Commands
 
-### Setup & Lifecycle (8+)
-`init` · `scan [--incremental] [--max-files N] [--full]` · `registry-validate` · `detect` · `watch [--debounce SECS] [--git-mode] [--interval SECS]` · `git-status` · `migrate` · `serve` · `lsp-status` (issue #33: `codelens --lsp-status` top-level flag is an alias of `codelens lsp-status` — both delegate to `hybrid_engine.get_lsp_status()` and return the identical payload)
+| Command | `--check` sub-modes |
+|---|---|
+| `scan` | scan (default) · rescan |
+| `search "pattern" [workspace]` | semantic (default) · symbol · regex · graph — **pattern first, workspace second**, opposite of every command below |
+| `context [workspace]` | orient (default) · outline · trace (`--name X --direction up\|down\|both`) · context (`--name X`) |
+| `deps [workspace]` | affected (`--files ...`) · dependents (`--files ...`) · circular · import-snapshot (`--input path.gz`) · export-snapshot (`--output path.gz`) |
+| `audit [workspace]` | dead-code · complexity · smell · staleness · perf-hint · side-effect |
+| `security [workspace]` | secrets · vuln-scan · taint · binary-scan · regex-audit |
+| `summary [workspace]` | summary (default) · dashboard · arch-metrics · architecture |
+| `impact [workspace]` | impact (`--name X`, default) · diff · dataflow |
+| `api-map [workspace]` | api-map (default) · graph-schema |
+| `doctor [workspace]` | doctor (default) · env-check · lsp-status |
+| `history [workspace]` | history (default) · ownership · git-status |
+| `graph [workspace] "cypher query"` | — (power-user raw Cypher) |
 
-### Pre-Write Safety (5)
-`query "name" [--domain ...] [--fuzzy]` · `impact "name" [--action modify|delete]` · `refactor-safe "name" [--action rename|move]` · `guard (--pre|--post) --file PATH` · `check [--severity ...] [--max-findings N]`
-
-### Navigation (11)
-`architecture [--lite] [--no-cache]` · `summary [--focus security|quality|architecture|all] [--detail minimal|standard|full]` · `context "name"` · `trace "name" [--direction up|down|both] [--limit N] [--offset N]` · `search "pattern" [--limit N] [--offset N]` · `symbols "name" [--fuzzy] [--limit N] [--offset N]` · `outline [--file path] [--limit N] [--offset N]` · `dependents "file"` · `list [--filter ...] [--limit N] [--offset N]` · `ask "question"` · `diff [--git-aware]`
-
-### Architecture (10)
-`entrypoints` · `api-map` · `state-map` · `detect` · `handbook` · `diff [--git-aware]` · `dashboard` · `history` · `graph-schema` · `resolve-types`
-
-### Security (6)
-`secrets [--severity ...]` · `taint` (AST-based) · `dataflow [--source ...] [--sink ...]` (cross-file) · `vuln-scan [--offline] [--osv-ttl N] [--refresh] [--max-age Nh]` (OSV.dev + native audit; `--refresh` bypasses cache, `--max-age Nh` overrides per-run TTL, `cache_info` in output signals staleness — issue #30) · `deps-audit [--severity ...] [--ecosystem PyPI|npm|crates.io] [--offline]` (pure-Python OSV.dev dependency audit, stores findings as `dependency_vuln` graph nodes — issue #158) · `env-check [--var NAME]`
-
-### Quality (9)
-`smell [--categories ...] [--severity ...]` · `complexity [--name FN] [--threshold N] [--sort ...]` · `dead-code [--categories ...]` · `debug-leak [--category ...]` · `circular [--domain ...]` · `missing-refs` · `side-effect [--name FN]` · `perf-hint [--severity ...] [--category ...]` · `fix [--apply]`
-
-### Refactoring (3)
-`test-map` · `stack-trace "name"` · `config-drift`
-
-### Frontend (2)
-`css-deep` · `a11y`
-
-### Advanced & RE (5)
-`analyze [--focus ...] [--timeout SECS]` · `type-infer` · `ownership` · `regex-audit` · `binary-scan` · `artifact-scan [--deep]`
-
-### Tooling (1)
-`plugin <install|list|search|update|info|validate>`
+Plus two commands hidden from `--help` but callable directly, pending final placement (issue #200): `check [workspace] --severity ... --max-findings N` (CI/CD quality gate), `plugin list` (plugin management).
 
 **Total: 12 commands** (auto-registered via `commands/__init__.py`; rerun `python3 scripts/sync_command_count.py --apply` after adding/removing a command)
 
 ## MCP Server (12 Tools)
 
-Start the MCP server for AI agent integration:
+MCP tools are invoked by an MCP-aware client (Claude Desktop, Cursor, VS Code Copilot, Continue.dev, Cline) — there is no standalone `codelens serve` command to run yourself. Point your MCP client config at `scripts/mcp_server.py`; see [mcp_config.json](mcp_config.json) for ready-made templates.
 
-```bash
-python3 scripts/codelens.py serve
-```
-
-Exposes 12 tools as `codelens_<command>` (e.g., `codelens_query`, `codelens_taint`, `codelens_graph_schema`, `codelens_architecture`, `codelens_resolve_types`, `codelens_git_status`):
-- 50 statically-defined tools (full JSON schemas in `mcp_server.py`)
-- -44 dynamically-discovered tools (auto-discovered from `COMMAND_REGISTRY`; long-running `watch` and `serve` are excluded)
-- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`). Use `format: "compact"` for token-efficient responses (~50% smaller than `json`).
-- `watch` and `serve` itself are excluded (long-running)
-
-See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
+- **12 tools total** — one `codelens_<command>` per umbrella command (e.g. `codelens_search`, `codelens_audit`, `codelens_security`), auto-discovered from `COMMAND_REGISTRY` (6 statically-defined with full JSON schemas + 6 dynamically-discovered)
+- Every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`) — use `format: "compact"` for token-efficient responses
+- Long-running commands (`watch`) are excluded from MCP exposure
 
 ## Error Handling
 
-All errors return `{status:"error", error_type, error, suggestion}`. Common patterns:
+All errors return `{status:"error", error, error_type}` (some also include a `suggestion` field). Common patterns:
 
 | Condition | Recovery |
-|-----------|----------|
-| No `.codelens/` | Auto-init+scan (zero-config) |
-| Tree-sitter missing | Regex fallback (run `setup.sh` for AST) |
-| `ask` timeout (45s) | Run specific command directly |
-| Any `status:"error"` | Follow `suggestion` field |
+|---|---|
+| No `.codelens/` registry | Auto-scans (zero-config) — no separate init step needed |
+| Tree-sitter missing | Regex fallback kicks in automatically (run `setup.sh` for full AST accuracy) |
+| Any `status:"error"` | Follow the `error`/`suggestion` field in the response |
 | Workspace invalid | Auto-detect from cwd/parent dirs |
-| `analyze` engine timeout | `skipped:true` per-engine — run that command individually |
-| `summary` budget exceeded | `timed_out_engines[]` — use `--detail minimal` or specific commands |
-| `handbook` budget exceeded | `partial:true` — run individual commands for skipped sections |
-| `guard` blocks write | Follow `blocked_reason` — fix the flagged issue before retrying |
+| `search "X" "Y"` returns empty `"ok"` result unexpectedly | Check argument order — `search` is pattern-first, everything else is workspace-first |
+| `--lite` output looks emptier than expected | Command may be hitting the generic fallback reducer, not a dedicated one — see Lite Mode table above |
 
-## First-Time Setup (if zero-config fails)
+## First-Time Setup
 
 ```bash
-bash /path/to/codelens/setup.sh    # One-time: install tree-sitter
-$CLI init                           # Creates .codelens/ config
-$CLI scan                           # Builds registry (~5-15s for <500 files)
-$CLI query "main"                   # Verify: returns {found, action}
-# After code changes: $CLI scan --incremental (~1-5s)
+pip install codelens
+codelens scan /path/to/project        # Builds registry (~5-15s for <500 files); no separate init step
+codelens search "main" /path/to/project --mode symbol   # Verify: returns a valid JSON result
+# After code changes:
+codelens scan /path/to/project --incremental    # ~1-5s
 ```

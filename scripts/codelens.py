@@ -1018,7 +1018,7 @@ def main():
         description=(
             f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence "
             f"(Tree-sitter Edition). {_command_count} commands available; run "
-            f"`python3 scripts/codelens.py --command-count` to print just the count."
+            f"`codelens --command-count` to print just the count."
         )
     )
     # Quick introspection flag — prints the runtime command count and exits.

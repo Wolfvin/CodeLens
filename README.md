@@ -1,347 +1,304 @@
+<p align="center">
+  <img alt="CodeLens" src="https://img.shields.io/badge/CodeLens-AI--Native%20Code%20Intelligence-blue?style=for-the-badge" />
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/codelens/"><img alt="PyPI" src="https://img.shields.io/pypi/v/codelens?color=blue"></a>
+  <a href="LICENSE.txt"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
+  <a href="https://www.python.org/downloads/"><img alt="Python" src="https://img.shields.io/badge/python-3.8%2B-blue"></a>
+  <a href="CONTRIBUTING.md"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg"></a>
+</p>
+
 # CodeLens — AI-Native Code Intelligence
 
-> **Before an AI writes a new class/id/function, CodeLens must be checked. This is not optional.**
+> **Before an AI writes a new class, id, or function, CodeLens must be checked. This is not optional.**
 
-CodeLens is an AI-native code intelligence platform that gives AI agents **full visibility** into a codebase before they write any code. It prevents collision, overwrite of existing logic, security vulnerabilities, and dead code through 12 CLI commands, an MCP server with 12 tools, AST-based taint analysis, live CVE/OSV scanning, a plugin system with OWASP Top 10 + Compliance rule packs, a true graph data model (nodes + edges) for structural code queries, and token-efficient `--format compact` output for high-volume agent workflows (issue #17).
+CodeLens is code intelligence built for AI agents, not humans skimming a dashboard. It gives an agent **full visibility into a codebase before it writes a line** — preventing collisions with existing symbols, silent overwrites, security vulnerabilities, and dead code it can't see coming. One CLI, 12 focused commands, an MCP server for direct agent integration, tree-sitter parsing across 7 core languages (13 with regex fallback for 28 more), and token-efficient output modes built for high-volume agent workflows.
 
-## Features
+**Replace this:**
+```bash
+grep -r "handleAuth" src/          # text match, no idea who calls it, is it dead, is it safe to touch
+```
 
-- **12 CLI Commands** — From basic scan/query to AST taint analysis, CVE scanning, plugin management, auto-fix, dashboards, CI/CD quality gates, and `graph-schema` for cheap graph-shape introspection
-- **MCP Server (12 Tools)** — Native AI agent integration via Model Context Protocol (JSON-RPC over stdio), 12 tools total (auto-discovered from COMMAND_REGISTRY), every tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`)
-- **Token-Efficient Compact Output (v8.2, issue #17)** — `--format compact` produces single-char-key JSON with abbreviated types, omitted null fields, and relative paths — ~50% smaller than `json` on real trace output. Combined with `--limit`/`--offset` pagination, 5 structural queries now cost <5k tokens (down from 30-80k)
-- **AST Taint Engine** — Tree-sitter based taint analysis with return-value propagation, scope hierarchy, and branch condition refinement
-- **Live CVE/OSV Scanning** — Real-time vulnerability data from OSV.dev API with SQLite cache, 9 ecosystems (PyPI, npm, crates.io, Go, Maven, NuGet, RubyGems, Pub, Hex)
-- **Cross-File Call Graph** — Workspace-wide call graph with import resolution and bidirectional taint propagation
-- **Graph Data Model (v8.2)** — True node + edge graph (`graph_nodes` + `graph_edges` SQLite tables) for structural queries: callers, callees, blast radius, circular chains. Populated during scan; `trace` engine migrated to use it by default with `--use-graph` / `--no-graph` flag for A/B testing
-- **Plugin System** — 4 plugin types (rule_pack/engine/formatter/command), 3-tier discovery (local → user → built-in), OWASP Top 10 (36 rules) + Compliance (53 rules: PCI-DSS v4.0 + HIPAA)
-- **VS Code Extension** — Diagnostics Provider, Code Actions, Guard hooks, Health status bar
-- **CI/CD Integration** — GitHub Actions workflows, SARIF v2.1.0 output, PR decoration, `check` quality-gate command
-- **Guard Command** — Pre/post-write verification designed for AI agent workflows
-- **Tree-sitter Powered** — Accurate AST-based parsing for HTML, CSS, JS, TS/TSX, Rust, Python, Vue, Svelte, Blade
-- **Regex Fallback Parsers** — 28 additional languages supported via regex-based parsers (C, C++, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell, Vim, Zig, and more)
-- **Framework Auto-Detection** — React/Next.js, Vue, Svelte, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, and more
-- **Incremental Scanning** — Only re-parse changed files for speed, with SQLite persistent registry storage
-- **Git-Aware Re-Index (v8.2)** — `scan --incremental` uses `git diff <last-indexed-sha> --name-only` to enumerate exactly the files git knows changed (mtime fallback when git unavailable). `git-status` reports the HEAD/last-indexed SHA + branch + changed-files count + re-scan recommendation in one call. `diff --git-aware` shows changed files + symbols + downstream caller impact. `watch --git-mode` polls `git diff --name-only` instead of watchdog file events. All features gracefully degrade when git is unavailable
-- **Workspace Auto-Detect** — No need to specify workspace path if you're already in the project
-- **AI-Optimized Output** — `--format ai` (normalized schema) and `--format compact` (token-efficient single-char keys) flags for AI agent consumption
-- **Auto-Fix Engine** — Confidence-scored auto-fixes with dry-run-by-default safety
-- **HTML Dashboard** — Generate visual dashboards with historical trend tracking
-- **Hybrid LSP Engine** — Optional LSP-enhanced deep analysis (`--deep` flag) when language servers are available
-- **Security Auditing** — Detect hardcoded secrets, data flow taint analysis, CVE scanning, ReDoS regex auditing
-- **Quality Scoring** — Code smells, complexity metrics, dead code detection
-- **CSS Deep Analysis** — Unused variables, orphan keyframes, specificity wars, z-index abuse
-- **Performance Hints** — N+1 queries, sync blocking, memory leaks, expensive renders
+**With this:**
+```bash
+codelens search "handleAuth" . --mode symbol   # exact symbol + status(active/dead) + reference count
+codelens context . --check trace --name handleAuth --direction up   # every real caller, cross-file, cross-language
+```
+
+---
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Why CodeLens](#why-codelens)
+- [The 12 Commands](#the-12-commands)
+- [Common Workflows](#common-workflows)
+- [Interpreting Output](#interpreting-output)
+- [Supported Languages & Frameworks](#supported-languages--frameworks)
+- [AI Agent Integration](#ai-agent-integration)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Honest Competitive Positioning](#honest-competitive-positioning)
+- [Contributing](#contributing)
+
+---
 
 ## Quick Start
 
 ```bash
-# Install dependencies (tree-sitter grammars + watchdog)
-bash setup.sh
+pip install codelens
 
-# Initialize workspace (auto-detects frameworks)
-python3 scripts/codelens.py init /path/to/workspace
+# Scan a workspace and build the graph (auto-runs on first use of any command too)
+codelens scan /path/to/workspace
 
-# Scan workspace and build registry
-python3 scripts/codelens.py scan /path/to/workspace
+# Find a symbol before creating one — does "handleAuth" already exist?
+codelens search "handleAuth" /path/to/workspace --mode symbol
 
-# Check if "btn-primary" already exists before creating it
-python3 scripts/codelens.py query "btn-primary" /path/to/workspace --domain frontend
+# 10-second orientation on an unfamiliar codebase
+codelens context /path/to/workspace
 
-# List all dead code
-python3 scripts/codelens.py list /path/to/workspace --domain all --filter dead
-
-# Detect frameworks
-python3 scripts/codelens.py detect /path/to/workspace
+# What's actually dead vs. what looks dead?
+codelens audit /path/to/workspace --check dead-code
 ```
 
-### Workspace Auto-Detect (v5.1+)
-
-If you omit the workspace path, CodeLens auto-detects it:
+Omit the workspace path and CodeLens auto-detects it from your current directory:
 
 ```bash
-python3 scripts/codelens.py scan              # Auto-detect workspace
-python3 scripts/codelens.py query "btn-primary" # Auto-detect workspace
-python3 scripts/codelens.py smell              # Auto-detect workspace
+cd /path/to/workspace
+codelens search "handleAuth" --mode symbol
+codelens context
 ```
 
-### Zero-Config for AI Agents (v6+)
+### Zero-config for AI agents
 
-If no `.codelens/` registry exists, any analysis command auto-runs `init` + `scan` (capped at 3000 files to prevent timeout):
+If no `.codelens/` registry exists yet, any analysis command auto-runs `scan` first — no separate init step required:
 
 ```bash
-export CODELENS_AI_MODE=1           # --format ai becomes default
-python3 scripts/codelens.py query "myFunction" --lite
-# → Auto-init + auto-scan → then query → {found, action}
+export CODELENS_AI_MODE=1          # --format ai becomes the default
+codelens search "handleAuth" . --mode symbol --lite
+# → auto-scans (first run only) → returns {status, found, action}
 ```
 
-## Command Reference
+> **Token budget matters.** Always pass `--lite` in an agent loop — it cuts every command's output down to the fields that actually drive a decision. See [Interpreting Output](#interpreting-output).
 
-CodeLens consolidates 78 legacy commands into **12 focused umbrella commands** (issue #195). Each umbrella command accepts a `--check <category>` flag to select a specific sub-analysis, or runs all sub-analyses by default. The 32 deprecated aliases retained for one version after #195 have now been removed (issue #199) — see [Deprecated Aliases](#deprecated-aliases) below.
+---
 
-### The 12 Umbrella Commands
+## Why CodeLens
 
-| Command | Absorbs | Description |
-|---------|---------|-------------|
-| `scan [workspace] [--check scan\|init\|rescan]` | scan, init, rescan | Scan workspace and build registry. `--check init` writes config only; `--check rescan` is incremental. |
-| `search [workspace] "query" [--mode semantic\|symbol\|regex\|graph]` | symbols, semantic-query, query-graph, search | Unified search. Default mode is semantic (TF-IDF by meaning). `--mode symbol` for exact name lookup, `--mode regex` for code search, `--mode graph` for Cypher-subset queries. |
-| `context [workspace] [--check orient\|outline\|trace\|context]` | context, outline, trace, orient | Codebase & symbol context. Default `--check orient` gives a 10-second orientation brief. `--name <symbol>` required for trace/context sub-analyses. |
-| `deps [workspace] [--check affected\|dependents\|circular\|import-snapshot]` | affected, dependents, circular, import-snapshot | Dependency-graph intelligence. `--check affected` takes `--files`; `--check import-snapshot` takes `--input path.codelens.gz`. |
-| `audit [workspace] [--check dead-code\|complexity\|smell\|staleness\|perf-hint\|side-effect]` | dead-code, complexity, smell, staleness, god-module, perf-hint, side-effect | Code-quality audits. Default runs all checks. |
-| `security [workspace] [--check secrets\|vuln-scan\|taint\|binary-scan\|regex-audit]` | secrets, vuln-scan, taint, binary-scan, regex-audit | Security & vulnerability scans. Default runs all checks. |
-| `summary [workspace] [--check summary\|dashboard\|arch-metrics\|architecture]` | summary, dashboard, arch-metrics, architecture | Auto-summary, dashboards, architecture metrics. Default `--check summary` runs the legacy prioritized-findings aggregator. |
-| `impact [workspace] [--check impact\|diff\|dataflow]` | impact, diff, dataflow | Change-impact & dataflow analysis. Default `--check impact` takes `--name <symbol>`. |
-| `api-map [workspace] [--check api-map\|graph-schema]` | api-map, routes, graph-schema | API surface & graph schema introspection. Default `--check api-map`. |
-| `doctor [workspace] [--check doctor\|env-check\|lsp-status]` | doctor, env-check, lsp-status | Environment audit. Default `--check doctor` runs the full dependency audit. |
-| `history [workspace] [--check history\|ownership\|git-status]` | history, ownership, git-status | Historical trends, code ownership, git scan state. Default `--check history`. |
-| `graph [workspace] "Cypher query"` | query-graph (raw Cypher) | Raw Cypher-subset graph query for power users. Casual callers should prefer `search --mode graph`. |
+Grep and manual reads answer "does this string exist." They don't answer the questions that actually matter before an agent writes or deletes code:
 
-### Deprecated Aliases
+| Question grep can't answer | CodeLens command |
+|---|---|
+| Is this symbol actually dead, or just rarely called? | `audit --check dead-code` cross-checked with `context --check trace --direction up` |
+| Who calls this function, transitively, across file *and* language boundaries? | `context --check trace --name X --direction up\|down` |
+| Will deleting/changing this break something? | `impact --check impact --name X` |
+| Is there a real command-injection/taint path from user input to a shell call? | `security --check taint` |
+| What does this codebase even look like in 10 seconds? | `context` (orient is the default) |
+| Structural graph question ("all functions calling any DB write") in one call, not five chained lookups | `search --mode graph` (Cypher subset) |
 
-All deprecated aliases have been removed in this version (issue #199, post-#195 cleanup). The 32 legacy command names that were retained as hidden aliases for one version after the #195 consolidation — `affected`, `arch-metrics`, `architecture`, `binary-scan`, `circular`, `complexity`, `dashboard`, `dataflow`, `dead-code`, `dependents`, `diff`, `env-check`, `git-status`, `graph-schema`, `import-snapshot`, `init`, `lsp-status`, `orient`, `outline`, `ownership`, `perf-hint`, `query-graph`, `regex-audit`, `secrets`, `semantic-query`, `side-effect`, `smell`, `staleness`, `symbols`, `taint`, `trace`, `vuln-scan` — are no longer registered. Invoking any of them now produces an `invalid choice` error from argparse instead of a deprecation warning. Use the 12 umbrella commands above (e.g. `codelens audit --check dead-code` instead of `codelens dead-code`).
+Every answer comes from a real SQLite-backed call graph (`graph_nodes` + `graph_edges`), built once per scan and reused — not re-grepped from scratch on every query.
 
-### Dropped Commands (removed in issue #195)
+---
 
-The following commands were removed entirely — broken, no value, or out of scope: `adr`, `a11y`, `handbook`, `ask`, `serve`, `sessions`, `watch`, `registry-validate`, `rule-test`, `rule-validate`, `artifact-scan`, `css-deep`, `debug-leak`, `detect`, `export-snapshot`, `refactor-safe`, `resolve-types`, `stack-trace`, `migrate` (as a command — utility module kept for tests), `benchmark`, `fix`, `self-analyze`, `guard`, `llm`, `memory`.
+## The 12 Commands
 
-### Hidden Commands (pending BOS decision)
+CodeLens consolidates what used to be ~78 separate commands into **12 umbrella commands** (each with `--check <sub-analysis>` for a specific sub-mode; omit `--check` to run all sub-analyses).
 
-The following 13 commands are not in any absorb list nor explicitly dropped. They are kept callable but hidden from `--help` pending a BOS decision on where they belong: `analyze`, `check`, `config-drift`, `deps-audit`, `entrypoints`, `lsp`, `list`, `missing-refs`, `plugin`, `query`, `state-map`, `test-map`, `type-infer`.
+| Command | `--check` sub-modes | What it answers |
+|---|---|---|
+| `scan` | scan (default) · rescan | Build/refresh the workspace graph. Everything else depends on this having run once. |
+| `search` | semantic (default) · symbol · regex · graph | The grep replacement. `pattern` comes **first**, workspace second — opposite of every other command below. See [gotcha](#a-gotcha-worth-memorizing). |
+| `context` | orient (default) · outline · trace · context | Orientation, file structure, call-chain tracing, rich symbol context. |
+| `deps` | affected · dependents · circular (default: all three) · import-snapshot · export-snapshot | Dependency graph: what's affected by a change, who imports what, circular imports, team snapshot sharing. |
+| `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect (default: all) | Code quality. `dead-code` cross-checked against `context --check trace` before you trust it. |
+| `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) | Hardcoded secrets, CVE/OSV dependency scanning, AST taint analysis, ReDoS. **Taint is Python/JS/TS/TSX only** — no Rust source/sink rules yet. |
+| `summary` | summary (default) · dashboard · arch-metrics · architecture | Prioritized, anti-overload findings digest. Use `--lite` — it's designed to still be big without it. |
+| `impact` | impact (default) · diff · dataflow | Blast-radius analysis before you touch something. |
+| `api-map` | api-map (default) · graph-schema | HTTP/IPC route inventory, auth-middleware coverage, cheap graph-shape introspection. |
+| `doctor` | doctor (default) · env-check · lsp-status | Environment/dependency health check. |
+| `history` | history (default) · ownership · git-status | Trend tracking across scans, git blame ownership, scan staleness vs. HEAD. |
+| `graph` | — | Raw Cypher-subset query for power users. Casual callers should use `search --mode graph` instead. |
 
-## Query Decision Rules
+### A gotcha worth memorizing
 
-| Query Result | Action |
-|-------------|--------|
-| `found: false` | SAFE — create new |
-| `found: true` + `status: active` | EXTEND — don't overwrite |
-| `found: true` + `status: dead` | ASK user — reuse or delete? |
-| `found: true` + `status: duplicate_ref` | LIST all referrers first |
-| `found: true` + `status: collision` | STOP — active bug, fix first |
+`search` takes `pattern` first, `workspace` second. Every other command above takes `workspace` first. Getting this backwards does **not** error — the workspace path silently becomes the search pattern and you get an empty `"ok"` result.
 
-## Impact Risk Levels
+```bash
+codelens search "handleAuth" .  --mode symbol   # correct
+codelens audit                .  --check dead-code  # different order, also correct
+```
 
-| Risk Level | Action |
-|-----------|--------|
-| `critical` | DO NOT change. Report to user. |
-| `high` | Warning. List all affected first. |
-| `medium` | Caution. Run tests. |
-| `low` | Safe, proceed. |
+---
 
-## Interpreting Signals
+## Common Workflows
 
-- `reference_count` / caller count = **how often** something is called, not how important it is. A function called once in the payment flow can be more critical than a utility called 50×.
-- To judge importance, run `trace --direction up <symbol>` to find **who** calls it, then weigh by context (payment, auth, hot path).
-- Use `--format compact` for AI/script consumption (token-efficient single-char keys), `--lite` for minimal output in large repos.
-- First `scan` is intentionally slower — it builds the SQLite graph. Subsequent runs are incremental (pass `--incremental` to only re-scan changed files).
+```bash
+# Before creating a new component/function — does it already exist?
+codelens search "AdGate" . --mode symbol --lite
+
+# Full 10-second orientation on a repo you've never seen
+codelens context .
+
+# Is this symbol safe to delete? (cross-check dead-code with trace)
+codelens audit . --check dead-code --lite
+codelens context . --check trace --name myOldHelper --direction up
+
+# What breaks if I change this?
+codelens impact . --check impact --name processPayment
+
+# Security sweep before a release
+codelens security . --check secrets
+codelens security . --check vuln-scan
+codelens security . --check taint
+
+# CI/CD quality gate — exits non-zero on failure
+codelens check . --severity high --max-findings 50
+codelens check . --format sarif > codelens.sarif
+
+# Structural query in one call instead of chaining trace+impact+context
+codelens search "MATCH (f:function)-[:CALLS]->(g:function) WHERE g.name CONTAINS 'exec' RETURN f.name, g.name LIMIT 20" . --mode graph
+
+# GraphML export — opens directly in Gephi/Cytoscape/yEd/Neo4j
+codelens scan . --format graphml > codelens.graphml
+codelens context . --check trace --name main --format graphml > trace.graphml
+```
+
+---
+
+## Interpreting Output
+
+### `--lite` is the real token-budget lever
+
+Full non-lite output on a real workspace routinely runs 10-50x larger than `--lite`. Every command supports it; coverage of dedicated (hand-tuned) reducers vs. the generic fallback is documented in [docs/agent-usage-guide.md](docs/agent-usage-guide.md).
+
+### Decision rules
+
+| `search --mode symbol` result | Action |
+|---|---|
+| not found | Safe to create |
+| found, `status: active` | Extend, don't overwrite |
+| found, `status: dead` | Ask before reusing — verify with `trace` first |
+| found, multiple matches | List all referrers before touching anything |
+
+| `impact` risk level | Action |
+|---|---|
+| `critical` | Do not change without explicit user confirmation |
+| `high` | List every affected file first |
+| `medium` | Proceed with test coverage |
+| `low` | Safe |
+
+### `reference_count` is popularity, not importance
+
+A function called once in the payment flow can be more critical than a utility called 50 times. To judge real importance: `context --check trace --name X --direction up` to see **who** calls it, then weigh by context (payment, auth, entry point). `status: dead` in `audit --check dead-code` is not automatically "safe to delete" either — cross-check the same way; entry points (HTTP handlers, CLI subcommands, exported APIs) often show zero inbound graph edges but are still critical.
+
+First `scan` on a workspace is intentionally slower (builds the SQLite graph from scratch). Every subsequent scan is incremental.
+
+---
 
 ## Supported Languages & Frameworks
 
-**Tree-sitter parsed (AST-level):** HTML, CSS, SCSS, JavaScript, TypeScript, TSX/JSX, Rust, Python, Vue SFC, Svelte, Blade
+**Tree-sitter parsed (AST-level), verified against a real 425-file polyglot Tauri+React workspace:** Rust, TypeScript, TSX/JSX, JavaScript, Python, HTML, CSS/SCSS. Also: Vue SFC, Svelte, Blade.
 
-**Regex fallback parsed (28+ languages):** C, C++, C#, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell/Bash, Vim, Zig, and more
+**Regex fallback (28+ additional languages):** C, C++, C#, Go, Java, Kotlin, Swift, Ruby, PHP, Scala, Dart, Elixir, Lua, R, Haskell, Nim, Objective-C, GDScript, Shell/Bash, Vim, Zig, and more.
 
-**Frameworks:** React/Next.js, Vue/Nuxt, Svelte/SvelteKit, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, Drupal, pytest, poetry, setuptools, tox, sphinx, nox, hatch
+**Frameworks auto-detected:** React/Next.js, Vue/Nuxt, Svelte/SvelteKit, Tailwind CSS, Express, Fastify, Koa, Hono, Django, Flask, FastAPI, Tauri, and more.
 
-**Package Managers:** npm, yarn, pnpm, bun, cargo, pip, pipenv, poetry, go modules
+**Per-language verified coverage** (dead-code accuracy, taint gaps, trace behavior) is documented in detail in [docs/agent-usage-guide.md](docs/agent-usage-guide.md) — including the honest gap: `security --check taint` has zero Rust coverage today.
 
-## Architecture
+---
 
-```
-codelens/
-├── SKILL.md                       # Full documentation for AI agents
-├── SKILL-QUICK.md                 # Quick reference (concise)
-├── README.md                      # This file
-├── CHANGELOG.md                   # Version history (top-level)
-├── CONTRIBUTING.md                # Contribution guidelines
-├── SECURITY.md                    # Security policy
-├── CODE_OF_CONDUCT.md             # Code of Conduct
-├── LICENSE.txt                    # MIT License
-├── setup.sh                       # Dependency installer
-├── pyproject.toml                 # Python package metadata
-├── skill.json                     # Skill metadata
-├── mcp_config.json                # MCP server config templates (Claude, Cursor, VS Code, Continue, Cline)
-├── pytest.ini                     # Pytest configuration
-├── references/                    # Detailed reference docs
-│   ├── parser-rules.md            # Parsing rules per language
-│   ├── query-examples.md          # Query usage examples
-│   ├── status-codes.md            # Status & flag reference
-│   ├── changelog.md               # Older changelog (per-version highlights)
-│   └── agent-integration.md       # AI agent integration guide
-├── scripts/
-│   ├── codelens.py                # CLI entry point (12 commands registered)
-│   ├── mcp_server.py              # MCP JSON-RPC server (12 tools)
-│   ├── registry.py                # Registry read/write/build
-│   ├── persistent_registry.py     # SQLite persistent storage (WAL mode)
-│   ├── base_parser.py             # Base tree-sitter parser
-│   ├── base_engine.py             # Base analysis engine
-│   ├── grammar_loader.py          # Lazy tree-sitter grammar loader
-│   ├── framework_detect.py        # Framework auto-detection
-│   ├── incremental.py             # Incremental scan support
-│   ├── edge_resolver.py           # Cross-file edge resolution
-│   ├── graph_model.py             # Graph data model (nodes + edges) — issue #8
-│   ├── git_aware.py               # Git-diff aware incremental re-index — issue #14
-│   ├── search_engine.py           # Regex code search
-│   ├── trace_engine.py            # Call chain tracing
-│   ├── impact_engine.py           # Change impact analysis
-│   ├── outline_engine.py          # File structure outline
-│   ├── missing_refs.py            # CSS/HTML mismatch detection
-│   ├── diff_engine.py             # Registry diff/snapshots
-│   ├── circular_engine.py         # Circular dependency detection
-│   ├── context_engine.py          # Rich symbol context
-│   ├── dependents_engine.py       # Module import tracking
-│   ├── validate_engine.py         # Registry validation
-│   ├── dataflow_engine.py         # Data flow taint analysis
-│   ├── ast_taint_engine.py        # AST-based taint analysis (tree-sitter)
-│   ├── crossfile_taint_engine.py  # Cross-file taint propagation
-│   ├── callgraph_engine.py        # Workspace-wide call graph
-│   ├── smell_engine.py            # Code smell detection
-│   ├── sideeffect_engine.py       # Side-effect analysis
-│   ├── refactor_safe_engine.py    # Refactoring safety check
-│   ├── deadcode_engine.py         # Enhanced dead code detection
-│   ├── stacktrace_engine.py       # Error propagation simulation
-│   ├── testmap_engine.py          # Test coverage mapping
-│   ├── configdrift_engine.py      # Dependency drift detection
-│   ├── typeinfer_engine.py        # Lightweight type inference
-│   ├── ownership_engine.py        # Git blame ownership
-│   ├── secrets_engine.py          # Hardcoded secret detection
-│   ├── entrypoints_engine.py      # Entry point mapping
-│   ├── apimap_engine.py           # API route mapping
-│   ├── statemap_engine.py         # State management tracking
-│   ├── envcheck_engine.py         # Environment variable audit
-│   ├── debugleak_engine.py        # Debug code leak detection
-│   ├── complexity_engine.py       # Complexity scoring
-│   ├── regexaudit_engine.py       # Regex auditing (ReDoS)
-│   ├── a11y_engine.py             # Accessibility auditing (WCAG 2.1)
-│   ├── vulnscan_engine.py         # Vulnerability scanning
-│   ├── osv_client.py              # OSV.dev API client (9 ecosystems)
-│   ├── perfhint_engine.py         # Performance hints
-│   ├── cssdeep_engine.py          # Deep CSS analysis
-│   ├── autofix_engine.py          # Auto-fix with confidence scoring
-│   ├── dashboard_engine.py        # HTML dashboard generation
-│   ├── history_engine.py          # Historical trend tracking
-│   ├── semantic_engine.py         # Semantic rules engine
-│   ├── hybrid_engine.py           # LSP-enhanced hybrid analysis
-│   ├── lsp_client.py              # LSP client wrapper
-│   ├── convention_engine.py       # Naming convention checking
-│   ├── plugin_system.py           # Plugin system & marketplace
-│   ├── pre_commit_hook.py         # Git pre-commit hook integration
-│   ├── utils.py                   # Shared utilities (version, helpers)
-│   ├── commands/                  # One file per CLI command (auto-registered, 64 commands)
-│   ├── formatters/                # Output formatters (markdown, sarif, compact, graphml)
-│   ├── parsers/                   # Tree-sitter + fallback parsers
-│   │   ├── html_parser.py, css_parser.py, js_frontend_parser.py, js_backend_parser.py
-│   │   ├── rust_parser.py, python_parser.py, tsx_parser.py, ts_backend_parser.py
-│   │   ├── vue_parser.py, svelte_parser.py, tailwind_detector.py, blade_parser.py
-│   │   └── fallback_*.py          # 28 regex-based fallback parsers (C, C++, Go, Java, ...)
-│   ├── rules/                     # Built-in YAML rule packs
-│   │   ├── javascript_security.yaml
-│   │   └── python_security.yaml
-│   └── plugins/                   # Built-in plugin packs
-│       ├── owasp_top10/rules/owasp_top10.yaml   (36 rules, A01-A10)
-│       └── compliance/rules/{hipaa.yaml, pci_dss.yaml}  (53 rules)
-├── benchmarks/                    # Benchmark suite & fixtures (clean_app + vulnerable_app)
-├── tests/                         # Pytest test suite
-└── vscode-codelens/               # VS Code extension source
-```
+## AI Agent Integration
 
-## Requirements
+**Key principle:** before an AI writes any new class, id, or function, it should query CodeLens first to check for collisions, overwrites, and dead code.
 
-- Python 3.8+
-- tree-sitter + language grammars (auto-installed by `setup.sh`)
-- watchdog (optional, for file watching)
-- git (optional, for ownership analysis)
-- Language server (optional, for `--deep` LSP-enhanced analysis)
+### MCP Server
 
-## Installation
+CodeLens ships a native MCP server (JSON-RPC over stdio) with **12 tools** — one per umbrella command, auto-discovered from the command registry:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Wolfvin/CodeLens.git
-cd CodeLens
-
-# Run setup
-bash setup.sh
-
-# Verify
-python3 scripts/codelens.py --help
+codelens serve   # not available — MCP tools are invoked by an MCP-aware client (Claude Desktop, Cursor, VS Code Copilot, Continue.dev, Cline), see mcp_config.json for templates
 ```
 
-## Integration with AI Agents
-
-CodeLens is designed to be used by AI coding agents. The full integration guide is in [references/agent-integration.md](references/agent-integration.md).
-
-**Key principle:** Before an AI writes any new class, id, or function, it MUST query CodeLens first to check for collisions, overwrites, and dead code.
-
-### MCP Server Integration
-
-CodeLens ships with a native MCP server (55 tools) for direct AI agent integration:
-
-```bash
-# Start MCP server (JSON-RPC over stdio)
-python3 scripts/codelens.py serve
-```
-
-Every MCP tool accepts a `format` parameter with the enum `[json, markdown, ai, sarif, compact, graphml]`.
-For high-volume agent workflows, pass `format: "compact"` to cut token usage ~50%.
-For graph-producing commands (`scan`, `trace`, `impact`, `circular`), pass `format: "graphml"` to emit a GraphML 1.0 XML document that opens directly in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3). Example:
+Every MCP tool accepts a `format` parameter (`json`/`markdown`/`ai`/`sarif`/`compact`/`graphml`). For high-volume agent workflows pass `format: "compact"` (single-char keys, ~50% smaller). For graph-shape introspection before paying tokens on a structural query, call `codelens_api_map` with `--check graph-schema` first:
 
 ```json
-// tools/call with format=compact
-{"name": "codelens_graph_schema", "arguments": {"workspace": "/path/to/proj", "format": "compact"}}
-// → {"s":"ok","n":1234,"e":5678,"nts":{"function":1000,"class":234},"ets":{"CALLS":5678},"ix":6}
+{"name": "codelens_api_map", "arguments": {"workspace": "/path/to/proj", "check": "graph-schema", "format": "compact"}}
+// → {"s":"ok","n":1234,"e":5678,"nts":{"function":1000,"class":234},"ets":{"CALLS":5678}}
 ```
 
-The new `codelens_graph_schema` tool (issue #17) returns the graph shape in one cheap call —
-use it first to decide whether structural queries (callers/callees/blast-radius) will return
-meaningful results before paying tokens for them.
-
-See `mcp_config.json` for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
-
-### Guard Hooks for AI Agents
-
-```bash
-# Pre-write safety check
-python3 scripts/codelens.py guard /path/to/workspace --pre --file src/new_module.py
-
-# Post-write verification
-python3 scripts/codelens.py guard /path/to/workspace --post --file src/new_module.py
-```
+See [mcp_config.json](mcp_config.json) for Claude Desktop, Cursor, VS Code Copilot, Continue.dev, and Cline configuration templates.
 
 ### CI/CD Quality Gate
 
 ```bash
-# Quality gate — exits non-zero on failure (use in CI/CD pipelines)
-python3 scripts/codelens.py check /path/to/workspace --severity high --max-findings 50
+# Exits non-zero on failure — wire into CI
+codelens check . --severity high --max-findings 50
 
-# SARIF output for GitHub Advanced Security / VS Code
-python3 scripts/codelens.py check /path/to/workspace --format sarif > codelens.sarif
-
-# GraphML export — opens in Gephi/Cytoscape/yEd/Neo4j (issue #59 Phase 3)
-python3 scripts/codelens.py scan /path/to/workspace --format graphml > codelens.graphml
-python3 scripts/codelens.py trace main /path/to/workspace --format graphml > trace.graphml
-python3 scripts/codelens.py impact my_function /path/to/workspace --format graphml > impact.graphml
-python3 scripts/codelens.py circular /path/to/workspace --format graphml > cycles.graphml
+# SARIF for GitHub Advanced Security / VS Code
+codelens check . --format sarif > codelens.sarif
 ```
 
 ### Plugin System
 
 ```bash
-# List installed plugins
-python3 scripts/codelens.py plugin list
-
-# Built-in plugins (already shipped):
-#   - owasp_top10  (36 OWASP Top 10 rules, A01-A10)
-#   - compliance   (53 rules: PCI-DSS v4.0 + HIPAA Security Rule)
-
-# Search registry (future marketplace)
-python3 scripts/codelens.py plugin search "sql injection"
+codelens plugin list
+# Built-in: owasp_top10 (36 rules, A01-A10) + compliance (53 rules: PCI-DSS v4.0 + HIPAA)
 ```
+
+---
+
+## Architecture
+
+```
+codelens/
+├── SKILL.md / SKILL-QUICK.md      # Full / quick reference for AI agents
+├── README.md                      # This file
+├── docs/
+│   ├── agent-usage-guide.md       # Verified per-language coverage, --lite reducer coverage, known gaps
+│   └── design/                    # Design docs (one per feature-class PR, issue-numbered)
+├── references/                    # parser-rules, query-examples, status-codes, agent-integration
+├── scripts/
+│   ├── codelens.py                # CLI entry point
+│   ├── mcp_server.py              # MCP JSON-RPC server (12 tools)
+│   ├── commands/                  # One file per CLI command + per-umbrella --check sub-mode
+│   ├── *_engine.py                # Analysis engines (taint, callgraph, deadcode, secrets, ...)
+│   ├── parsers/                   # Tree-sitter + 28 regex fallback parsers
+│   ├── formatters/                # json, markdown, ai, sarif, compact, graphml
+│   ├── graph_model.py             # graph_nodes + graph_edges SQLite schema
+│   └── plugins/                   # owasp_top10, compliance rule packs
+├── benchmarks/                    # Benchmark suite & fixtures
+├── tests/                         # pytest suite
+└── vscode-codelens/                # VS Code extension source
+```
+
+## Installation
+
+```bash
+pip install codelens
+codelens --help
+```
+
+For local development against the source checkout:
+
+```bash
+git clone https://github.com/Wolfvin/CodeLens.git
+cd CodeLens
+bash setup.sh
+pip install -e .
+codelens --help
+```
+
+**Requirements:** Python 3.8+. tree-sitter grammars auto-installed by `setup.sh`. `watchdog` optional (file watching), `git` optional (ownership analysis), a language server optional (`--deep` LSP-enhanced analysis).
+
+---
 
 ## Honest Competitive Positioning
 
-CodeLens excels in **AI-native code intelligence** — a niche where MCP integration, guard hooks, and AI-optimized output matter most. Here is an honest assessment vs established tools:
+CodeLens excels in **AI-native code intelligence** — a niche where MCP integration and AI-optimized output matter most. Here's an honest assessment against established tools:
 
 | Dimension | CodeLens | SonarQube | CodeQL | Semgrep |
-|-----------|:--------:|:---------:|:------:|:-------:|
+|---|:---:|:---:|:---:|:---:|
 | AI Agent Integration | **8** | 4 | 3 | 5 |
 | Frontend Breadth | **8** | 6 | 3 | 5 |
 | MCP / AI-Native Design | **9** | 2 | 2 | 3 |
@@ -353,24 +310,20 @@ CodeLens excels in **AI-native code intelligence** — a niche where MCP integra
 | Live CVE Scanning | 7 | 9 | 3 | **8** |
 | Cross-File Analysis | 6 | 8 | **10** | 7 |
 
-**Our genuine strengths:** AI-native design, frontend analysis breadth, MCP integration, guard for AI workflows.
+**Genuine strengths:** AI-native design, frontend analysis breadth, MCP integration.
+**Where we lag:** community ecosystem, IDE marketplace presence, deep abstract interpretation (CodeQL's domain).
+**Goal:** the best code intelligence tool for AI agent workflows — not a SonarQube replacement.
 
-**Where we lag:** Community ecosystem, IDE marketplace presence, deep abstract interpretation (CodeQL's domain), enterprise CI/CD integrations.
-
-**Our goal:** Be the best code intelligence tool for AI agent workflows, not a SonarQube replacement.
+---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT License — see [LICENSE.txt](LICENSE.txt)
+MIT — see [LICENSE.txt](LICENSE.txt).
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md) for version history (top-level) and [references/changelog.md](references/changelog.md) for older per-version highlights.
+[CHANGELOG.md](CHANGELOG.md) (current) · [references/changelog.md](references/changelog.md) (older per-version highlights).
