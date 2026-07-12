@@ -2183,6 +2183,39 @@ def _detect_dead_from_registry(
     if not isinstance(nodes, list):
         return []
 
+    # Rust unit tests live inline in the same file as production code inside
+    # `#[cfg(test)] mod tests { ... }`, annotated per-function with #[test] /
+    # #[tokio::test] / #[async_std::test] — unlike JS/Python where tests sit
+    # in a separate tests/ directory (already exempted below by
+    # _test_example_patterns). Without this, every Rust test function and
+    # every `mod tests` block false-positives as registry_dead, since the
+    # test harness invokes them via attribute discovery, not a CALLS edge.
+    _rust_test_attr_re = re.compile(r'^\s*#\[\s*(?:\w+::)?test\s*\]')
+    _rust_file_lines_cache: Dict[str, List[str]] = {}
+
+    def _rust_symbol_is_test(file_path: str, line: int) -> bool:
+        if file_path not in _rust_file_lines_cache:
+            try:
+                abs_path = os.path.join(workspace, file_path) if not os.path.isabs(file_path) else file_path
+                with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    _rust_file_lines_cache[file_path] = f.readlines()
+            except (IOError, OSError):
+                _rust_file_lines_cache[file_path] = []
+        lines = _rust_file_lines_cache[file_path]
+        # Look at the 1-3 lines immediately above the definition for a
+        # #[test]-family attribute (allowing stacked attributes like
+        # #[should_panic] / #[ignore] between #[test] and the fn).
+        for offset in range(1, 4):
+            idx = line - 1 - offset
+            if idx < 0:
+                break
+            candidate = lines[idx] if idx < len(lines) else ""
+            if _rust_test_attr_re.match(candidate):
+                return True
+            if candidate.strip() and not candidate.strip().startswith('#['):
+                break
+        return False
+
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -2236,6 +2269,14 @@ def _detect_dead_from_registry(
                 # qualified names like `Module::func`
                 if '::' in name and bare_name in _in_file_usages:
                     continue
+            # Skip Rust inline test modules/functions (#[cfg(test)] mod tests,
+            # #[test] fn ...) — see _rust_symbol_is_test docstring above.
+            if file_path.endswith('.rs'):
+                if node_type == "module" and bare_name == "tests":
+                    continue
+                if _rust_symbol_is_test(file_path, line):
+                    continue
+
             # Skip test fixtures and example files
             # v6.4: Expanded to catch examples/, e2e/, __tests__/, stories/
             _test_example_patterns = [

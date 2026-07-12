@@ -623,3 +623,78 @@ class TestIssue220DetectDeadFromRegistry:
             )
         finally:
             shutil.rmtree(ws, ignore_errors=True)
+
+    def test_registry_dead_exempts_rust_inline_test_functions(self):
+        """Rust unit tests live inline as `#[cfg(test)] mod tests { #[test]
+        fn ... }` in the same file as production code — unlike JS/Python
+        where tests sit in a separate tests/ directory. A #[test]-attributed
+        function has ref_count==0 by design (invoked by the test harness via
+        attribute discovery, not a CALLS edge) and must not be flagged, nor
+        should the `mod tests` module itself. A genuinely dead production
+        function in the same file must still be flagged.
+        """
+        import json
+        ws = tempfile.mkdtemp()
+        try:
+            rs_content = (
+                "fn genuinely_unused_prod_fn() {}\n"
+                "\n"
+                "#[cfg(test)]\n"
+                "mod tests {\n"
+                "    use super::*;\n"
+                "\n"
+                "    #[test]\n"
+                "    fn atomic_write_creates_file() {\n"
+                "        assert!(true);\n"
+                "    }\n"
+                "\n"
+                "    #[tokio::test]\n"
+                "    async fn async_test_case() {\n"
+                "        assert!(true);\n"
+                "    }\n"
+                "}\n"
+            )
+            with open(os.path.join(ws, "verify.rs"), 'w') as f:
+                f.write(rs_content)
+
+            registry = {
+                "nodes": [
+                    {
+                        "fn": "genuinely_unused_prod_fn", "file": "verify.rs", "line": 1,
+                        "ref_count": 0, "status": "dead", "type": "function", "pub": False
+                    },
+                    {
+                        "fn": "tests", "file": "verify.rs", "line": 4,
+                        "ref_count": 0, "status": "dead", "type": "module", "pub": False
+                    },
+                    {
+                        "fn": "atomic_write_creates_file", "file": "verify.rs", "line": 8,
+                        "ref_count": 0, "status": "dead", "type": "function", "pub": False
+                    },
+                    {
+                        "fn": "async_test_case", "file": "verify.rs", "line": 13,
+                        "ref_count": 0, "status": "dead", "type": "function", "pub": False
+                    },
+                ],
+                "edges": []
+            }
+            codelens_dir = os.path.join(ws, ".codelens")
+            os.makedirs(codelens_dir, exist_ok=True)
+            with open(os.path.join(codelens_dir, "backend.json"), 'w') as f:
+                json.dump(registry, f)
+
+            result = _detect_dead_from_registry(ws, None)
+            names = {item["name"] for item in result}
+
+            assert "tests" not in names, f"mod tests must be exempted. Findings: {result}"
+            assert "atomic_write_creates_file" not in names, (
+                f"#[test] fn must be exempted. Findings: {result}"
+            )
+            assert "async_test_case" not in names, (
+                f"#[tokio::test] fn must be exempted. Findings: {result}"
+            )
+            assert "genuinely_unused_prod_fn" in names, (
+                f"Genuinely dead production fn must still be flagged. Findings: {result}"
+            )
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
