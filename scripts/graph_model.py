@@ -96,6 +96,91 @@ _FLAT_TYPE_TO_NODE_TYPE: Dict[str, str] = {
 }
 
 
+# ─── Module-level synthetic source_id (issue #223) ────────────
+#
+# JS/TS parsers emit module-top-level calls (calls not nested inside any
+# function declaration) with a synthetic ``source_id = "<file>:0:<module>"``
+# — see ``js_backend_parser.py:248``, ``ts_backend_parser.py:125``,
+# ``fallback_js_backend.py:196``. The synthetic id has NO matching entry
+# in ``graph_nodes`` (intentional — keeps ``list``/``search`` output free
+# of fake ``<module>`` function entries, per PR #219 design).
+#
+# Pre-#223 this caused ``trace --direction up`` and ``impact`` to silently
+# drop module-level callers: the BFS JOIN ``graph_nodes.node_id = ?``
+# returned no row, and the caller was skipped. ``ref_count`` (computed
+# from the target side) was correct, but ``trace``/``impact`` (computed
+# from the source side) were wrong — inconsistent and dangerous for
+# anyone using trace to decide "safe to delete?".
+#
+# ``_MODULE_LEVEL_SENTINEL`` is the literal name component used to mark
+# these synthetic ids. ``is_module_level_source_id(node_id)`` lets
+# traversal code recognize them and synthesize a human-readable
+# "module-level caller in <file>" entry WITHOUT creating a fake node
+# in ``graph_nodes`` (constraint from issue #223).
+_MODULE_LEVEL_SENTINEL = "<module>"
+
+
+def is_module_level_source_id(node_id: str) -> bool:
+    """Return True if ``node_id`` is a synthetic module-level caller id.
+
+    Synthetic ids follow the format ``"<file>:0:<module>"`` — emitted by
+    JS/TS parsers for calls at module top level (not nested in any
+    function body). They have no matching entry in ``graph_nodes`` by
+    design (issue #219 / PR #219), so traversal code must special-case
+    them to avoid silently dropping module-level callers from
+    ``trace``/``impact`` output (issue #223).
+
+    Detection is intentionally strict on the ``:0:<module>`` suffix so
+    that real node ids (which use the actual line number and a real
+    function name) never match — a real function named ``<module>`` at
+    line 0 would be exotic enough that we accept the theoretical
+    false-positive risk.
+    """
+    if not node_id:
+        return False
+    return node_id.endswith(":" + _MODULE_LEVEL_SENTINEL) and ":0:" in node_id
+
+
+def _module_level_caller_entry(
+    node_id: str,
+    depth: int,
+    edge_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build a result entry for a synthetic module-level caller.
+
+    Used by ``_bfs`` when a CALLS edge's ``source_id`` is a synthetic
+    ``<file>:0:<module>`` id (no ``graph_nodes`` row). The entry exposes
+    enough info for ``trace_engine`` / ``impact_engine`` to render the
+    caller as "module-level caller in <file>" without needing a real
+    node row.
+
+    Args:
+        node_id: The synthetic source_id (``<file>:0:<module>``).
+        depth: BFS depth at which this neighbor was found.
+        edge_dict: The raw graph_edges row (for file/line/confidence).
+
+    Returns:
+        Dict with the same shape as a resolved caller entry, plus
+        ``module_level=True`` and ``node_type="module"`` so consumers
+        can render it distinctly.
+    """
+    src_file, src_line = _parse_file_line_from_node_id(node_id)
+    return {
+        "node_id": node_id,
+        "name": _MODULE_LEVEL_SENTINEL,
+        "node_type": NODE_TYPE_MODULE,
+        "file": src_file,
+        "line": src_line,
+        "depth": depth,
+        "edge_file": edge_dict.get("file", "") or src_file,
+        "edge_line": edge_dict.get("line", 0) or src_line,
+        "confidence": edge_dict.get("confidence", 1.0),
+        "resolved": True,           # edge IS resolvable to a file:line
+        "cyclic": False,
+        "module_level": True,       # marker for trace_engine / impact_engine
+    }
+
+
 # ─── SQL Statements ───────────────────────────────────────────
 
 _CREATE_GRAPH_NODES = """
@@ -1067,6 +1152,15 @@ def _bfs(
                     continue
                 reported_cycles.add(cycle_key)
 
+                # Issue #223: synthetic ``<file>:0:<module>`` source_id has
+                # no graph_nodes row — emit a module-level caller entry
+                # instead of silently dropping the cyclic reference.
+                if is_module_level_source_id(neighbor_id):
+                    entry = _module_level_caller_entry(neighbor_id, depth, edge_dict)
+                    entry["cyclic"] = True
+                    results.append(entry)
+                    continue
+
                 neighbor_row = conn.execute(
                     "SELECT * FROM {t} WHERE node_id = ?".format(t=GRAPH_NODES_TABLE),
                     (neighbor_id,),
@@ -1088,6 +1182,24 @@ def _bfs(
                 continue
 
             visited.add(neighbor_id)
+
+            # Issue #223: synthetic ``<file>:0:<module>`` source_id has no
+            # graph_nodes row. Pre-#223 this caused ``trace --direction up``
+            # and ``impact`` to silently drop all module-level callers —
+            # inconsistent with ``ref_count`` (computed from target side,
+            # already correct after PR #219). Emit a synthesized entry so
+            # consumers can render "module-level caller in <file>" without
+            # needing a fake node in graph_nodes (constraint from #223).
+            #
+            # Module-level callers are terminal: they have no further
+            # callers of their own (module scope is the top of the file's
+            # call hierarchy), so we do NOT enqueue them for further BFS.
+            if is_module_level_source_id(neighbor_id):
+                results.append(
+                    _module_level_caller_entry(neighbor_id, depth, edge_dict)
+                )
+                continue
+
             neighbor_row = conn.execute(
                 "SELECT * FROM {t} WHERE node_id = ?".format(t=GRAPH_NODES_TABLE),
                 (neighbor_id,),
