@@ -39,7 +39,7 @@ def test_every_command_module_registers():
     # register_command() calls were removed because the CLI alias is gone,
     # but the umbrella commands import them for --check sub-analyses.
     _DEPRECATED_ALIAS_MODULES = {
-        "affected", "arch_metrics", "architecture", "binary_scan",
+        "a11y", "affected", "arch_metrics", "architecture", "binary_scan",
         "circular", "complexity", "css_deep", "dashboard", "dataflow",
         "dead_code", "dependents", "diagnostics", "diff", "env_check",
         "export_snapshot", "git_status", "graph_schema", "import_snapshot",
