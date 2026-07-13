@@ -1447,14 +1447,9 @@ def main():
     # ─── Auto-setup: if command needs registry and none exists, bootstrap it ────
     # Commands that need a registry to work meaningfully
     _REGISTRY_COMMANDS = {
-        "query", "trace", "impact", "context", "dependents", "list",
-        "symbols", "search", "summary", "smell", "complexity", "dead-code",
-        "debug-leak", "circular", "missing-refs", "side-effect", "perf-hint",
-        "secrets", "dataflow", "vuln-scan", "env-check", "entrypoints",
-        "api-map", "state-map", "handbook", "analyze", "test-map",
-        "stack-trace", "config-drift", "type-infer", "ownership",
-        "regex-audit", "a11y", "css-deep", "diff", "ask",
-        "taint", "dashboard", "history",
+        "search", "context", "deps", "audit", "security",
+        "summary", "impact", "api-map", "doctor", "history",
+        "graph",
     }
 
     auto_setup_info = None
