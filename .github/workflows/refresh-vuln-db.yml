@@ -125,6 +125,12 @@ jobs:
 
       - name: Create branch + commit
         if: steps.changes.outputs.has_changes == 'true'
+        env:
+          NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
+          COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
+          COUNT_AFTER: ${{ steps.post.outputs.count_after }}
+          DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
+          DATE_AFTER: ${{ steps.post.outputs.date_after }}
         run: |
           # Branch name includes the date so monthly runs don't conflict
           # if a previous PR is still open.
@@ -152,17 +158,15 @@ jobs:
             -m "Workflow: .github/workflows/refresh-vuln-db.yml" \
             -m "Co-authored-by: Wolfvin <wolfvin@users.noreply.github.com>"
 
-          env:
-            NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
-            COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
-            COUNT_AFTER: ${{ steps.post.outputs.count_after }}
-            DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
-            DATE_AFTER: ${{ steps.post.outputs.date_after }}
-
       - name: Push branch + create PR
         if: steps.changes.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
+          COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
+          COUNT_AFTER: ${{ steps.post.outputs.count_after }}
+          DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
+          DATE_AFTER: ${{ steps.post.outputs.date_after }}
         run: |
           git push --set-upstream origin "$BRANCH"
 
@@ -211,12 +215,6 @@ jobs:
             --label "automated"
 
           echo "PR created successfully."
-        env:
-          NEW_ENTRIES: ${{ steps.refresh.outputs.new_entries }}
-          COUNT_BEFORE: ${{ steps.pre.outputs.count_before }}
-          COUNT_AFTER: ${{ steps.post.outputs.count_after }}
-          DATE_BEFORE: ${{ steps.pre.outputs.date_before }}
-          DATE_AFTER: ${{ steps.post.outputs.date_after }}
 
       - name: Summary
         if: always()
