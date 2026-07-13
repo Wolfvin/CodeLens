@@ -59,6 +59,10 @@ _CHECKS = {
         "module": "commands.side_effect",
         "help": "Pure vs impure function analysis",
     },
+    "css": {
+        "module": "commands.css_deep",
+        "help": "Deep CSS analysis: unused vars, orphan keyframes, specificity wars, z-index abuse (issue #251)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -75,11 +79,14 @@ def add_args(parser):
         "  staleness     Per-file staleness detection\n"
         "  perf-hint     Performance anti-patterns\n"
         "  side-effect   Pure vs impure function analysis\n"
+        "  css           Deep CSS analysis: unused vars, orphan keyframes,\n"
+        "                specificity wars, z-index abuse (issue #251)\n"
         "\n"
         "Examples:\n"
         "  codelens audit .                          # all checks\n"
         "  codelens audit . --check dead-code        # only dead-code\n"
         "  codelens audit . --check complexity,smell # pick subset\n"
+        "  codelens audit . --check css              # deep CSS analysis\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -173,6 +180,10 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.name = getattr(base_args, "name", None)
         ns.file = getattr(base_args, "file", None)
         ns.max_files = getattr(base_args, "max_files", None) or 3000
+    elif check_name == "css":
+        # cssdeep_engine accepts severity (high|medium|low) + single category
+        ns.severity = getattr(base_args, "severity", None)
+        ns.category = getattr(base_args, "category", None)
     return ns
 
 
