@@ -402,8 +402,11 @@ def _query_graph_edges(workspace, target_node_id=None, source_contains=None):
         conditions = []
         params = []
         if target_node_id is not None:
-            conditions.append("target_id = ?")
-            params.append(target_node_id)
+            # backend.json node ids use the OS-native separator (backslash on
+            # Windows); graph_edges stores target_id with forward slashes.
+            # Normalize both sides so the match is cross-platform (issue #268).
+            conditions.append("REPLACE(target_id, '\\', '/') = ?")
+            params.append(target_node_id.replace("\\", "/"))
         if source_contains is not None:
             conditions.append("source_id LIKE ?")
             params.append(f"%{source_contains}%")
