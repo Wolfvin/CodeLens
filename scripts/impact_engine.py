@@ -15,6 +15,34 @@ try:
 except ImportError:
     _STD_LIB_METHODS = frozenset()
 
+# Issue #223: detect synthetic module-level source_ids emitted by JS/TS
+# parsers (``<file>:0:<module>``). These have no entry in the flat-registry
+# node list (intentional — keeps `list`/`search` output free of fake
+# ``<module>`` function entries), so the pre-#223 impact engine silently
+# dropped all module-level callers. ``ref_count`` was correct (computed
+# from target side), but ``impact`` showed 0 dependents — dangerous for
+# anyone using impact to decide "safe to delete?".
+try:
+    from graph_model import is_module_level_source_id
+except ImportError:
+    # Defensive fallback — should never trigger since graph_model is a
+    # core module, but keeps impact_engine functional in degenerate envs.
+    def is_module_level_source_id(node_id: str) -> bool:  # type: ignore[no-redef]
+        return bool(node_id) and node_id.endswith(":0:<module>")
+
+
+def _file_from_module_level_id(node_id: str) -> str:
+    """Extract the file path from a synthetic ``<file>:0:<module>`` id.
+
+    Returns ``""`` if the format doesn't match. Used by issue #223
+    impact entries so the human-readable "module-level caller in <file>"
+    line shows the originating file.
+    """
+    if not node_id or not is_module_level_source_id(node_id):
+        return ""
+    # Strip the trailing ``:0:<module>`` suffix.
+    return node_id[: -len(":0:<module>")]
+
 
 def analyze_impact(
     name: str,
@@ -108,6 +136,21 @@ def analyze_impact(
                         "relation": "calls " + name,
                         "domain": "backend"
                     })
+                elif is_module_level_source_id(from_id):
+                    # Issue #223: synthetic ``<file>:0:<module>`` source_id
+                    # has no flat-registry node entry. Emit a human-readable
+                    # "module-level caller in <file>" so impact no longer
+                    # silently drops module-level calls (was inconsistent
+                    # with ref_count which is computed from target side).
+                    affected["direct"].append({
+                        "type": "module",
+                        "name": "<module>",
+                        "file": _file_from_module_level_id(from_id),
+                        "line": 0,
+                        "relation": "module-level caller — calls " + name,
+                        "domain": "backend",
+                        "module_level": True,
+                    })
 
             # Direct callees (1 hop)
             direct_callee_edges = callees_map.get(target_id, [])
@@ -165,6 +208,22 @@ def analyze_impact(
                                 "domain": "backend"
                             })
                             queue.append((from_id, current_depth + 1))
+                        elif is_module_level_source_id(from_id) and current_depth >= 1:
+                            # Issue #223: module-level caller has no node
+                            # entry but IS a real dependent. Emit it as an
+                            # indirect dependent so impact count is
+                            # consistent with ref_count. Do NOT enqueue for
+                            # further BFS — module scope is terminal.
+                            affected["indirect"].append({
+                                "type": "module",
+                                "name": "<module>",
+                                "file": _file_from_module_level_id(from_id),
+                                "line": 0,
+                                "relation": f"{current_depth + 1} hops from {name} (module-level caller)",
+                                "depth": current_depth + 1,
+                                "domain": "backend",
+                                "module_level": True,
+                            })
 
             # If deleting, all callees that are only called by this function become at-risk
             if action == "delete":

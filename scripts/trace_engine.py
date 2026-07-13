@@ -621,7 +621,7 @@ def _bfs_trace_graph(
                     continue
                 reported_cycles.add(cycle_key)
                 neighbor_extra = neighbor.get("extra", {}) or {}
-                chain.append({
+                cyclic_entry = {
                     "depth": depth,
                     "direction": direction_label,
                     "node_id": neighbor_id,
@@ -632,7 +632,12 @@ def _bfs_trace_graph(
                     "cyclic": True,
                     "status": neighbor_extra.get("status", "active"),
                     "async": neighbor_extra.get("async", False),
-                })
+                }
+                # Issue #223: preserve module_level marker on cyclic entries.
+                if neighbor.get("module_level"):
+                    cyclic_entry["module_level"] = True
+                    cyclic_entry["fn"] = "<module>"
+                chain.append(cyclic_entry)
                 continue
 
             visited.add(neighbor_id)
@@ -652,6 +657,16 @@ def _bfs_trace_graph(
                 chain_entry["impl_for"] = neighbor_extra["impl_for"]
             if neighbor_extra.get("component"):
                 chain_entry["component"] = True
+            # Issue #223: module-level caller entry from graph_model._bfs.
+            # Mark it so formatters can render "module-level caller in <file>"
+            # distinctly. Do NOT enqueue for further BFS — module scope is
+            # the top of a file's call hierarchy, so module-level callers
+            # have no further callers of their own.
+            if neighbor.get("module_level"):
+                chain_entry["module_level"] = True
+                chain_entry["fn"] = "<module>"
+                chain.append(chain_entry)
+                continue
             chain.append(chain_entry)
 
             if depth < max_depth:
