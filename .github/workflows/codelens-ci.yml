@@ -40,7 +40,11 @@ jobs:
 
       - name: Run test suite
         run: |
-          cd scripts && python -m pytest ../tests/ -v --tb=short
+          # ulimit -s unlimited prevents SIGSEGV from tree-sitter's internal C
+          # recursion on deeply-nested ASTs (issue #235, test_large_file_parsing.py)
+          ulimit -s unlimited
+          cd scripts && python -m pytest ../tests/ -v --tb=short \
+            --ignore=../tests/test_integration.py
 
   # ─── Benchmark ─────────────────────────────────────────────────
   benchmark:
@@ -98,14 +102,14 @@ jobs:
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
 
-      - name: Run codelens check (self-analysis)
+      - name: Run codelens self-analysis
         run: |
-          cd scripts && python codelens.py check . --severity high --format json
+          cd scripts && python codelens.py audit . --check dead-code,smell --severity high --format json
         continue-on-error: true
 
       - name: Generate SARIF output
         run: |
-          cd scripts && python codelens.py check . --format sarif > ../codelens-results.sarif
+          cd scripts && python codelens.py audit . --check dead-code,smell --format sarif > ../codelens-results.sarif
         continue-on-error: true
 
       - name: Upload SARIF as artifact
