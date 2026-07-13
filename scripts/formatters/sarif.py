@@ -462,9 +462,12 @@ def to_sarif(data: Dict, command: str = "", workspace: str = "",
 
     # Add workspace info
     if workspace:
+        # Note: the .replace() is kept out of the f-string expression — a
+        # backslash inside an f-string `{...}` is a SyntaxError on Python < 3.12.
+        workspace_uri = workspace.replace('\\', '/')
         run["originalUriBaseIds"] = {
             "%SRCROOT%": {
-                "uri": f"file://{workspace.replace('\\', '/')}/",
+                "uri": f"file://{workspace_uri}/",
             }
         }
 

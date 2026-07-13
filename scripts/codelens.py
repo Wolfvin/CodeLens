@@ -1445,15 +1445,16 @@ def main():
         )
 
     # ─── Auto-setup: if command needs registry and none exists, bootstrap it ────
-    # Commands that need a registry to work meaningfully
-    _REGISTRY_COMMANDS = {
-        "search", "context", "deps", "audit", "security",
-        "summary", "impact", "api-map", "doctor", "history",
-        "graph",
-    }
+    # `scan` BUILDS the registry; `plugin`/`lsp` don't read it. Every other
+    # command — visible umbrella OR hidden leaf (list, query, ...) — consumes the
+    # registry and benefits from auto-setup when it's absent. Deriving the gate
+    # from this small exclusion set (rather than a hand-maintained allowlist)
+    # avoids the stale-list bug that let audit/security/deps/doctor and the hidden
+    # leaf commands slip through the gate (issue #244).
+    _NON_REGISTRY_COMMANDS = {"scan", "plugin", "lsp"}
 
     auto_setup_info = None
-    if args.command in _REGISTRY_COMMANDS and not _registry_exists(workspace):
+    if args.command not in _NON_REGISTRY_COMMANDS and not _registry_exists(workspace):
         auto_setup_result = _auto_setup(workspace)
         if auto_setup_result.get("auto_setup") == "ok":
             auto_setup_info = {
