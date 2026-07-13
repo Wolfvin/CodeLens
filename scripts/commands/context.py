@@ -54,6 +54,10 @@ _CHECKS = {
         "module": "commands.diagnostics",
         "help": "LSP lint/errors/warnings for a file (issue #253, needs --file)",
     },
+    "overview": {
+        "module": "commands.symbols_overview",
+        "help": "Token-efficient hierarchical symbols map from registry (issue #254)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -69,6 +73,7 @@ def add_args(parser):
         "  trace       Deep call chain from a symbol\n"
         "  orient      10-second codebase orientation brief\n"
         "  diagnostics LSP lint/errors/warnings for a file (needs --file, issue #253)\n"
+        "  overview    Token-efficient hierarchical symbols map (issue #254)\n"
         "\n"
         "Examples:\n"
         "  codelens context .                                  # orient (default)\n"
@@ -76,6 +81,8 @@ def add_args(parser):
         "  codelens context . --check trace --name handleAuth\n"
         "  codelens context . --check context --name handleAuth\n"
         "  codelens context . --check diagnostics --file src/app.ts\n"
+        "  codelens context . --check overview                 # workspace symbol map\n"
+        "  codelens context . --check overview --file src/auth.ts\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -104,6 +111,8 @@ def add_args(parser):
                         help="trace/outline: pagination offset")
     parser.add_argument("--timeout", type=float, default=None,
                         help="diagnostics: seconds to wait for LSP to push diagnostics (default 3.0)")
+    parser.add_argument("--max-files", type=int, default=None, dest="max_files",
+                        help="overview: max files in workspace-wide mode (default: 200)")
 
 
 def _parse_checks(check_arg: str) -> List[str]:
@@ -160,6 +169,9 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
     elif check_name == "diagnostics":
         ns.file = getattr(base_args, "file", None)
         ns.timeout = getattr(base_args, "timeout", None) or 3.0
+    elif check_name == "overview":
+        ns.file = getattr(base_args, "file", None)
+        ns.max_files = getattr(base_args, "max_files", None) or 200
     return ns
 
 
