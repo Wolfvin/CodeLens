@@ -1840,25 +1840,52 @@ def discover_files(workspace: str, config: Dict) -> Dict[str, List[str]]:
 
 
 def is_frontend_file(file_path: str, config: Dict) -> bool:
-    """Check if a file is in a frontend path."""
+    """Check if a file is in a frontend path.
+
+    Issue #231: previously this function also matched ``f"/{fp_norm}" in
+    normalized`` — i.e. any path containing the frontend_path as a MIDDLE
+    segment. That over-broad matching caused ``src/routes/public/customer-auth.ts``
+    (a backend route file) to be misclassified as a frontend TSX file just
+    because its path contained ``/public/``. The TSX frontend parser does
+    not extract backend call-graph edges, so every call inside that file
+    (including ``getGoogleClient()`` inside an ``asyncHandler(async (req,res)
+    => { ... })`` route handler) was silently dropped before reaching
+    ``backend.json`` / ``graph_edges`` — making ``getGoogleClient``'s
+    ``rc`` report 0 even though the parser correctly emits the edge in
+    isolation.
+
+    Frontend paths in the config are workspace-root-relative directory
+    prefixes (e.g. ``src/client/``, ``public/``). They should ONLY match
+    paths that start with the prefix — not paths that happen to contain
+    the prefix as a nested segment. ``should_ignore`` is different: it
+    intentionally matches middle segments (``node_modules`` can be nested
+    in monorepos), but ``frontend_paths``/``backend_paths`` identify the
+    workspace-root directory, not any directory with that name anywhere
+    in the tree.
+    """
     # Normalize to forward slashes
     normalized = file_path.replace('\\', '/')
     for fp in config.get("frontend_paths", []):
         fp_norm = fp.replace('\\', '/')
-        # Match as path segment prefix
-        if normalized.startswith(fp_norm) or f"/{fp_norm}" in normalized or normalized == fp_norm:
+        # Match only as a workspace-root-relative path prefix.
+        if normalized.startswith(fp_norm) or normalized == fp_norm:
             return True
     return False
 
 
 def is_backend_file(file_path: str, config: Dict) -> bool:
-    """Check if a file is in a backend path."""
+    """Check if a file is in a backend path.
+
+    Issue #231: see ``is_frontend_file`` for why the middle-segment
+    ``f"/{bp_norm}" in normalized`` check was removed. Backend paths are
+    workspace-root-relative directory prefixes.
+    """
     # Normalize to forward slashes
     normalized = file_path.replace('\\', '/')
     for bp in config.get("backend_paths", []):
         bp_norm = bp.replace('\\', '/')
-        # Match as path segment prefix
-        if normalized.startswith(bp_norm) or f"/{bp_norm}" in normalized or normalized == bp_norm:
+        # Match only as a workspace-root-relative path prefix.
+        if normalized.startswith(bp_norm) or normalized == bp_norm:
             return True
     return False
 
