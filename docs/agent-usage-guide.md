@@ -43,6 +43,7 @@ codelens audit <workspace> --check dead-code            # different order, also 
 | "Any secrets/vulnerable deps/injection risk?" | `security . --check secrets\|vuln-scan\|taint\|regex-audit` | **Taint is Python/JS/TS/TSX only** — see Known Gaps, no Rust coverage. |
 | "10-second repo orientation" | `context . --check orient` (or bare `context .`, it's the default) | Framework detection, dev commands, entry points. |
 | "Is this CSS var / keyframe still used? specificity/z-index problems?" | `audit . --check css` | Unused CSS vars, orphan keyframes, specificity wars, duplicate props, unused media queries, z-index abuse. `--severity`/`--category` filters. Restored issue #251 (engine was orphaned since #195). |
+| "What lint/type errors does the language server see in this file?" | `context . --check diagnostics --file <path>` | Surfaces LSP diagnostics (error/warning/info/hint) per file (issue #253). Requires a language server for that file's language installed; degrades to `lsp_available:false` + note if none. Opt-in, needs `--file`. |
 | "Prioritized health snapshot" | `summary .` | Aggregates dead-code/smell/taint/vuln-scan; use `--lite` for an agent-sized payload. |
 
 ---

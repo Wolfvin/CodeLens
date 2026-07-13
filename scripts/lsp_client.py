@@ -220,7 +220,12 @@ class LSPClient:
                     with self._lock:
                         self._response_map[msg["id"]] = msg
                 else:
-                    self._notification_list.append(msg)
+                    # Notifications (no id) — e.g. textDocument/publishDiagnostics.
+                    # Append under the same lock the diagnostics reader uses to
+                    # filter this list (issue #253), so a concurrent filter can't
+                    # race a mutation mid-iteration.
+                    with self._lock:
+                        self._notification_list.append(msg)
             except Exception:
                 return
 
@@ -397,6 +402,61 @@ class LSPClient:
         if isinstance(contents, str):
             return contents
         return None
+
+    def get_diagnostics(self, file_path: str, wait_timeout: float = 3.0) -> List[Dict]:
+        """Return LSP diagnostics (lint/errors/warnings) for ``file_path`` (issue #253).
+
+        Diagnostics are pushed by the language server as
+        ``textDocument/publishDiagnostics`` NOTIFICATIONS (not responses to a
+        request) after the file is opened — the reader loop already collects
+        every notification into ``_notification_list``. This method opens the
+        file (triggering server analysis), waits up to ``wait_timeout`` for a
+        matching publishDiagnostics notification to arrive, and returns the
+        latest one's ``diagnostics`` array.
+
+        Each diagnostic follows the LSP shape:
+        ``{range, severity (1=Error 2=Warning 3=Info 4=Hint), message,
+        source, code}``.
+
+        Returns ``[]`` if LSP isn't initialized, the server pushes nothing
+        within the timeout (many servers only diagnose on change, or the
+        file is clean), or on any error — never raises.
+        """
+        if not self._initialized:
+            return []
+        try:
+            abs_path = os.path.abspath(file_path)
+            target_uri = _path_to_uri(abs_path)
+            # Opening (or re-opening) the file triggers the server to analyze
+            # and push publishDiagnostics. Note we deliberately do NOT drop
+            # any already-collected diagnostics for this URI first: many
+            # servers only push on *change*, not on re-open, so dropping and
+            # waiting for a fresh push would return empty for a file that was
+            # already analyzed this session. If a fresh push does arrive it's
+            # appended later and "last wins" below picks it up.
+            self.open_file(abs_path)
+            # publishDiagnostics is async server-push — poll _notification_list
+            # until one arrives for this URI or the timeout expires. If one is
+            # already present (prior open), the first poll returns immediately.
+            deadline = time.time() + wait_timeout
+            latest: List[Dict] = []
+            found = False
+            while time.time() < deadline:
+                with self._lock:
+                    matches = [
+                        n for n in self._notification_list
+                        if n.get("method") == "textDocument/publishDiagnostics"
+                        and n.get("params", {}).get("uri") == target_uri
+                    ]
+                if matches:
+                    # Last one wins (server may push progressively).
+                    latest = matches[-1].get("params", {}).get("diagnostics", [])
+                    found = True
+                    break
+                time.sleep(0.1)
+            return latest if found else []
+        except Exception:
+            return []
 
     def _get_language_id(self, file_path: str) -> str:
         ext = os.path.splitext(file_path)[1].lower()
