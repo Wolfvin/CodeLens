@@ -50,6 +50,10 @@ _CHECKS = {
         "module": "commands.orient",
         "help": "10-second codebase orientation brief",
     },
+    "diagnostics": {
+        "module": "commands.diagnostics",
+        "help": "LSP lint/errors/warnings for a file (issue #253, needs --file)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -62,14 +66,16 @@ def add_args(parser):
         "Sub-analyses (issue #195):\n"
         "  context   Rich symbol context (callers, callees, metrics)\n"
         "  outline   File structure outline\n"
-        "  trace     Deep call chain from a symbol\n"
-        "  orient    10-second codebase orientation brief\n"
+        "  trace       Deep call chain from a symbol\n"
+        "  orient      10-second codebase orientation brief\n"
+        "  diagnostics LSP lint/errors/warnings for a file (needs --file, issue #253)\n"
         "\n"
         "Examples:\n"
         "  codelens context .                                  # orient (default)\n"
         "  codelens context . --check outline --file src/app.ts\n"
         "  codelens context . --check trace --name handleAuth\n"
         "  codelens context . --check context --name handleAuth\n"
+        "  codelens context . --check diagnostics --file src/app.ts\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -96,6 +102,8 @@ def add_args(parser):
                         help="trace/outline: result limit")
     parser.add_argument("--offset", type=int, default=0,
                         help="trace/outline: pagination offset")
+    parser.add_argument("--timeout", type=float, default=None,
+                        help="diagnostics: seconds to wait for LSP to push diagnostics (default 3.0)")
 
 
 def _parse_checks(check_arg: str) -> List[str]:
@@ -149,6 +157,9 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
     elif check_name == "orient":
         # orient reads top via getattr; reuse the base value if set.
         pass  # ns.top already set above via carry-over
+    elif check_name == "diagnostics":
+        ns.file = getattr(base_args, "file", None)
+        ns.timeout = getattr(base_args, "timeout", None) or 3.0
     return ns
 
 

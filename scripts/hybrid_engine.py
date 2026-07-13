@@ -104,6 +104,23 @@ class HybridEngine:
                 client.close_file(file_path)
         self._opened_files.clear()
 
+    def get_diagnostics(self, file_path: str, wait_timeout: float = 3.0) -> Optional[List[Dict]]:
+        """Return LSP diagnostics for ``file_path`` (issue #253).
+
+        Returns ``None`` if LSP is not active (server not installed or
+        ``--deep`` off) so the caller can distinguish "no LSP" from "LSP
+        ran and found nothing" (empty list). Never raises.
+        """
+        if not self.lsp_active:
+            return None
+        client = self.get_lsp_client(os.path.abspath(file_path))
+        if not client:
+            return None
+        try:
+            return client.get_diagnostics(os.path.abspath(file_path), wait_timeout=wait_timeout)
+        except Exception:
+            return None
+
     def cleanup(self) -> None:
         self.close_all_lsp_files()
 
