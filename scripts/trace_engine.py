@@ -377,6 +377,7 @@ def _bfs_trace_indexed(
         max_results: Max entries to return (prevents timeout)
     """
     from edge_resolver import get_callers, get_callees
+    from graph_model import is_module_level_source_id
 
     chain = []
     visited: Set[str] = set()
@@ -470,6 +471,24 @@ def _bfs_trace_indexed(
                 continue
 
             visited.add(neighbor_id)
+
+            # Issue #291/#223: a synthetic module-level caller id
+            # (`<file>:0:<module>`) has no node_by_id row. Without this the
+            # flat path falls through to the "unknown"/resolved=False branch,
+            # disagreeing with the graph path (which emits fn="<module>",
+            # module_level=True). Mirror the graph path exactly so flat==graph.
+            # Module scope is the top of a file's call hierarchy — do NOT
+            # enqueue for further BFS.
+            if is_module_level_source_id(neighbor_id):
+                chain.append({
+                    "depth": depth,
+                    "direction": direction_label,
+                    "node_id": neighbor_id,
+                    "fn": "<module>",
+                    "module_level": True,
+                    "path": f"{path} → {neighbor_id}",
+                })
+                continue
 
             if neighbor_id in node_by_id:
                 n = node_by_id[neighbor_id]
