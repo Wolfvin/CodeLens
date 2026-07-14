@@ -316,10 +316,10 @@ class TestCheckCommandArgs:
         try:
             cmd_scan(ws)  # build registry so check has something to read
             proc = subprocess.run(
-                [sys.executable, "scripts/codelens.py",
+                [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
                  "check", ws, "--severity", "high", "--format", "json"],
                 capture_output=True, text=True, timeout=60,
-                env={**os.environ, "PYTHONPATH": "scripts"},
+                env={**os.environ, "PYTHONPATH": SCRIPT_DIR},
             )
             # ``check`` exits 1 when gate fails (which it likely will on the
             # sample workspace) — that's fine, we only care that argparse
