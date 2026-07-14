@@ -96,7 +96,7 @@ registry without re-scanning:
 docker run --rm \
   -v "$(pwd):/workspace" \
   -v codelens-data:/home/codelens/.codelens \
-  ghcr.io/wolfvin/codelens query 'btn-primary' /workspace
+  ghcr.io/wolfvin/codelens search 'btn-primary' /workspace
 ```
 
 ### Shell alias
@@ -107,7 +107,7 @@ Add to `~/.bashrc` or `~/.zshrc`:
 alias codelens='docker run --rm -v "$(pwd):/workspace" -v codelens-data:/home/codelens/.codelens ghcr.io/wolfvin/codelens'
 ```
 
-Then use `codelens scan .`, `codelens query 'fn' .`, etc. exactly as if it
+Then use `codelens scan .`, `codelens search 'fn' .`, etc. exactly as if it
 were a locally installed binary.
 
 ### Deep analysis with LSP (maximal image only)

@@ -109,9 +109,9 @@ CodeLens consolidates what used to be ~78 separate commands into **12 umbrella c
 |---|---|---|
 | `scan` | scan (default) · rescan | Build/refresh the workspace graph. Everything else depends on this having run once. |
 | `search` | semantic (default) · symbol · regex · graph | The grep replacement. `pattern` comes **first**, workspace second — opposite of every other command below. See [gotcha](#a-gotcha-worth-memorizing). |
-| `context` | orient (default) · outline · trace · context | Orientation, file structure, call-chain tracing, rich symbol context. |
+| `context` | orient (default) · outline · trace · context · diagnostics · overview | Orientation, file structure, call-chain tracing, rich symbol context, LSP diagnostics (`--file`), token-efficient symbol map. |
 | `deps` | affected · dependents · circular (default: all three) · import-snapshot · export-snapshot | Dependency graph: what's affected by a change, who imports what, circular imports, team snapshot sharing. |
-| `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect (default: all) | Code quality. `dead-code` cross-checked against `context --check trace` before you trust it. |
+| `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css · a11y (default: all) | Code quality. `dead-code` cross-checked against `context --check trace` before you trust it. `css` = deep CSS analysis, `a11y` = WCAG 2.1 accessibility. |
 | `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) | Hardcoded secrets, CVE/OSV dependency scanning, AST taint analysis, ReDoS. **Taint is Python/JS/TS/TSX only** — no Rust source/sink rules yet. |
 | `summary` | summary (default) · dashboard · arch-metrics · architecture | Prioritized, anti-overload findings digest. Use `--lite` — it's designed to still be big without it. |
 | `impact` | impact (default) · diff · dataflow | Blast-radius analysis before you touch something. |
