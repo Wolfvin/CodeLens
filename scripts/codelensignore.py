@@ -208,12 +208,7 @@ class _FnmatchMatcher:
         result = False
         for is_neg, rx, anchored, dir_only in self._rules:
             if dir_only:
-                # Match if rel == pat or rel.startswith(pat + '/')
-                # We achieve this by matching the pattern OR pattern + '/*'
-                # Use the regex against the path and any prefix path that
-                # ends at a separator.
-                # Simpler: check the rule against every prefix of rel.
-                matched = self._match_dir_prefix(rx, rel)
+                matched = self._match_dir_prefix(rx, rel, anchored)
             else:
                 matched = bool(rx.match(rel))
             if matched:
@@ -221,17 +216,37 @@ class _FnmatchMatcher:
         return result
 
     @staticmethod
-    def _match_dir_prefix(rx: 're.Pattern', rel: str) -> bool:
-        """True if *rel* OR any ancestor directory matches *rx*."""
-        # Check the full path first
+    def _match_dir_prefix(rx: 're.Pattern', rel: str, anchored: bool = True) -> bool:
+        """True if *rel* is inside a directory matched by *rx*.
+
+        For an *anchored* pattern (``/target/``) only root-relative ancestor
+        directories count. For a *non-anchored* pattern (``target/`` — the
+        gitignore default) the directory may sit at ANY depth, so a whole path
+        segment matching the pattern is enough. Segment matching (not substring)
+        keeps ``build/`` from matching ``build-tools/`` (issue #271 / gitignore
+        backward-compat): ``src/target/debug/x`` is ignored by ``target/`` but
+        ``build-tools/config`` is not ignored by ``build/``.
+        """
+        # Check the full path first (handles patterns with wildcards/subpaths).
         if rx.match(rel):
             return True
-        # Then check every ancestor directory
         parts = rel.split('/')
-        for i in range(1, len(parts)):
-            prefix = '/'.join(parts[:i])
-            if rx.match(prefix):
-                return True
+        if anchored:
+            # Root-anchored: only ancestor paths measured from the root.
+            for i in range(1, len(parts)):
+                if rx.match('/'.join(parts[:i])):
+                    return True
+        else:
+            # Non-anchored: the pattern (single- or multi-segment) may sit at
+            # any depth → test every sub-path that both starts and ends on a
+            # segment boundary. This matches `target/` against `src/target/x`
+            # and `build/keep/` against `build/keep/x`, while whole-segment
+            # boundaries keep `build/` from matching `build-tools/`.
+            n = len(parts)
+            for i in range(n):
+                for j in range(i + 1, n + 1):
+                    if rx.match('/'.join(parts[i:j])):
+                        return True
         return False
 
 
