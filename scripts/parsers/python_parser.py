@@ -149,6 +149,15 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
 
         source = content.encode('utf-8')
 
+        # Issue #291: synthetic source id for module-top-level calls (calls not
+        # nested inside any function/class body — e.g. `setup_app()` written as
+        # a bare top-level statement). Mirrors the JS/TS convention from #219:
+        # a `<file>:0:<module>` id with no corresponding graph_nodes row, so
+        # `list`/`search` stay free of fake `<module>` entries while ref_count
+        # (computed from the target side) and `trace --direction up` still see
+        # the caller. `graph_model.is_module_level_source_id()` recognises it.
+        module_node_id = f"{file_path}:0:<module>"
+
         MAX_DEPTH = 200
 
         # Issue #116/#163: iterative DFS walk. The previous recursive form
@@ -266,8 +275,13 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                 # Skip decorators - they reference functions but aren't calls
                 continue
 
-            elif node.type == 'call' and fn_id:
-                # Function call: name(args) or obj.method(args)
+            elif node.type == 'call':
+                # Function call: name(args) or obj.method(args).
+                # Issue #291: when fn_id is None the call sits at module
+                # top-level (not inside any def/class body) — attribute it to
+                # the synthetic <module> source id so module-level calls still
+                # produce a CALLS edge (fixes false dead-code + rc undercount).
+                source_id = fn_id if fn_id else module_node_id
                 func_node = node.child_by_field_name('function')
                 if func_node:
                     keep_alive.append(func_node)
@@ -285,14 +299,14 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                             if method_name not in PYTHON_SKIP_NAMES:
                                 is_self = obj_name == 'self'
                                 edges.append({
-                                    "from": fn_id,
+                                    "from": source_id,
                                     "to_fn": method_name,
                                     "via_self": is_self
                                 })
                     elif func_node.type == 'identifier':
                         if call_name not in PYTHON_SKIP_NAMES:
                             edges.append({
-                                "from": fn_id,
+                                "from": source_id,
                                 "to_fn": call_name
                             })
 

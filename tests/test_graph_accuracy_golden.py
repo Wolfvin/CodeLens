@@ -153,9 +153,37 @@ used();
 """
 
 
+_MODULE_LEVEL_CALL_PY = """\
+# Guards #291: Python calls at module top level (not inside any def/class) must
+# count toward the callee's rc — analogous to #219 for TS/JS. Before #291 the
+# Python parser only emitted edges for calls inside a function body, so a
+# function called ONLY at module level got rc=0 / status=dead (false positive).
+def setup_app():
+    return 1
+
+
+def helper():
+    return 2
+
+
+def caller():
+    return helper()
+
+
+def py_never_called():
+    # Control: genuinely dead — never called anywhere. Must STAY dead.
+    return 99
+
+
+setup_app()   # module-level call -> synthetic <module> caller
+caller()      # module-level call -> synthetic <module> caller
+"""
+
+
 def _build_workspace(tmp_path) -> str:
     ws = tmp_path / "golden_ws"
     (ws / "src").mkdir(parents=True)
+    (ws / "src" / "mod_level.py").write_text(_MODULE_LEVEL_CALL_PY)
     (ws / "src" / "mod_level.ts").write_text(_MODULE_LEVEL_CALL_TS)
     (ws / "src" / "handler.ts").write_text(_ASYNC_HANDLER_TS)
     (ws / "src" / "svc.ts").write_text(_SVC_TS)
@@ -277,6 +305,63 @@ class TestGraphAccuracyGolden:
         red_hits = [f for f in findings if "RED" in str(f) and "same_file" in str(f).replace("\\", "/")]
         assert not red_hits, (
             f"#220 regression: same-file-used Rust const RED flagged dead by the engine: {red_hits[:1]}"
+        )
+
+    def test_python_module_level_call_counts_toward_rc(self, backend):
+        """#291: Python `setup_app`/`caller` called only at module top level.
+
+        Both are called via a bare top-level statement (not inside any function
+        body). Before #291 the Python parser emitted no edge for module-level
+        calls, so both had rc=0 / status=dead (false positive). Each must now
+        have rc>=1 with a caller from mod_level.py.
+        """
+        for fn in ("setup_app", "caller"):
+            rc = _rc(backend, fn)
+            assert rc >= 1, f"#291 regression: Python {fn} rc={rc}, expected >=1 (module-level call)"
+            callers = _callers_of(backend, fn)
+            assert any("mod_level.py" in c for c in callers), (
+                f"#291: expected a caller from mod_level.py for {fn}, got {callers}"
+            )
+
+    def test_python_module_level_caller_visible_in_trace_up(self, scanned):
+        """#291/#223: `trace --direction up setup_app` surfaces the <module> caller.
+
+        The module-level caller uses the synthetic `<file>:0:<module>` id (same
+        format as TS/JS), so `graph_model.is_module_level_source_id()` recognises
+        it and trace-up emits a `module_level=True` / `fn="<module>"` entry.
+        """
+        ws, _ = scanned
+        from commands.trace import execute
+
+        class _Args:
+            name = "setup_app"
+            direction = "up"
+            depth = 10
+            domain = "auto"
+            limit = 20
+            offset = 0
+            max_results = 1000
+            use_graph = True
+            deep = False
+            format = "json"
+
+        result = execute(_Args(), ws)
+        up = result.get("chains", {}).get("up", [])
+        module_callers = [c for c in up if c.get("module_level") or c.get("fn") == "<module>"]
+        assert module_callers, (
+            f"#291 regression: module-level caller of setup_app dropped from trace-up. up callers: {up}"
+        )
+
+    def test_python_genuinely_dead_still_detected(self, backend):
+        """#291 control: an unreferenced Python function IS still dead (rc 0).
+
+        Guards against a fix that inflates rc to hide false positives — a
+        genuinely-never-called Python function must retain rc 0.
+        """
+        nodes = _nodes_named(backend, "py_never_called")
+        assert nodes, "control node py_never_called missing"
+        assert nodes[0].get("ref_count", 0) == 0, (
+            f"#291 control: py_never_called should have rc 0, got {nodes[0].get('ref_count')}"
         )
 
     def test_genuinely_dead_still_detected(self, backend):
