@@ -210,6 +210,19 @@ def _suggest_fix(command: str, error: Exception) -> str:
 
 LAST_WORKSPACE_FILE = ".codelens_last_workspace"
 
+# Canonical set of ``--format`` choices, in dispatch order. The first six are
+# the JSON-family / graph formats (issue #17, #59). The final five are the
+# Phase 2 developer-tool formats (issue #52): ``text``, ``junit-xml``,
+# ``emacs``, ``vim``, ``gitlab-sast`` — all implemented in
+# ``formatters.format_output`` and each verified to produce output. This single
+# tuple is the source of truth for every argparse ``choices=`` list and the
+# manual pre-parse guard below, so the CLI can never expose fewer formats than
+# it actually supports.
+_FORMAT_CHOICES = (
+    "json", "markdown", "ai", "sarif", "compact", "graphml",
+    "text", "junit-xml", "emacs", "vim", "gitlab-sast",
+)
+
 
 def _save_last_workspace(workspace: str) -> None:
     """Save the last used workspace path to a global cache file."""
@@ -1161,8 +1174,8 @@ def main():
             format_args = ["--format"]
             if "-f" not in existing_option_strings:
                 format_args.append("-f")
-            sub.add_argument(*format_args, choices=["json", "markdown", "ai", "sarif", "compact", "graphml"], default=None,
-                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient single-char keys), or graphml (GraphML 1.0 XML for graph-producing commands)")
+            sub.add_argument(*format_args, choices=list(_FORMAT_CHOICES), default=None,
+                             help="Output format: json, markdown, ai (normalized schema), sarif (GitHub/VS Code), compact (token-efficient single-char keys), graphml (GraphML 1.0 XML for graph-producing commands), text, junit-xml, emacs, vim, or gitlab-sast")
 
         # Add AI-optimized flags to subparser ONLY if the command doesn't already have them
         if "top" not in existing_dests:
@@ -1195,8 +1208,8 @@ def main():
     # Global format option (works before subcommand)
     # Default: "ai" if CODELENS_AI_MODE is set (for AI consumers), else "json"
     _default_format = "ai" if os.environ.get("CODELENS_AI_MODE", "").lower() in ("1", "true", "yes") else "json"
-    parser.add_argument("--format", "-f", choices=["json", "markdown", "ai", "sarif", "compact", "graphml"], default=_default_format,
-                        help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default. compact = token-efficient single-char keys. graphml = GraphML XML for graph-producing commands)")
+    parser.add_argument("--format", "-f", choices=list(_FORMAT_CHOICES), default=_default_format,
+                        help=f"Output format (default: {_default_format}. Set CODELENS_AI_MODE=1 for ai default. compact = token-efficient single-char keys. graphml = GraphML XML for graph-producing commands. Also: text, junit-xml, emacs, vim, gitlab-sast)")
     parser.add_argument("--db-path", default=None,
                         help="Custom path for SQLite database (default: .codelens/codelens.db)")
     # Issue #157: --diff-base <ref> restricts analysis to files changed
@@ -1243,11 +1256,11 @@ def main():
         arg = sys.argv[i]
         if arg in ('-f', '--format') and i + 1 < len(sys.argv):
             next_arg = sys.argv[i + 1]
-            if next_arg in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
+            if next_arg in _FORMAT_CHOICES:
                 global_format = next_arg
-        elif arg.startswith('-f=') and arg[3:] in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
+        elif arg.startswith('-f=') and arg[3:] in _FORMAT_CHOICES:
             global_format = arg[3:]
-        elif arg.startswith('--format=') and arg[9:] in ('json', 'markdown', 'ai', 'sarif', 'compact', 'graphml'):
+        elif arg.startswith('--format=') and arg[9:] in _FORMAT_CHOICES:
             global_format = arg[9:]
         elif arg == '--top' and i + 1 < len(sys.argv):
             try:

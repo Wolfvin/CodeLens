@@ -234,5 +234,9 @@ def format_output(data: Any, format_type: str = "json", command: str = "",
     if format_type == "gitlab-sast":
         from formatters.gitlab_sast import format_gitlab_sast
         return format_gitlab_sast(data, command, workspace)
-    # Default: JSON
+    # Default: JSON. Stamp ``schema_version`` (issue #5) so raw JSON consumers
+    # get the same output contract as the ``ai`` format. Stamp a shallow copy so
+    # the caller's dict is never mutated.
+    if isinstance(data, dict) and "schema_version" not in data:
+        data = stamp_schema_version(dict(data))
     return json.dumps(data, indent=2, ensure_ascii=False)

@@ -466,14 +466,17 @@ class TestCLISmoke:
     def _run_cli(self, fmt):
         env = os.environ.copy()
         env["PYTHONPATH"] = SCRIPTS_DIR
+        # ``security`` is the umbrella command that absorbed the standalone
+        # ``secrets`` command in the #195 consolidation. Its ``--help`` must
+        # list the full ``--format`` choice set.
         return subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, "codelens.py"),
-             "secrets", "--format", fmt, "--help"],
+             "security", "--format", fmt, "--help"],
             capture_output=True, text=True, env=env, timeout=30,
         )
 
     def test_help_lists_new_formats(self):
-        """``codelens secrets --help`` should list the 5 new format choices."""
+        """``codelens security --help`` should list the 5 new format choices."""
         result = self._run_cli("text")
         # The --help output should mention all 5 new formats.
         for fmt in ("text", "junit-xml", "emacs", "vim", "gitlab-sast"):
