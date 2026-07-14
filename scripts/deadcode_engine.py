@@ -2151,6 +2151,22 @@ def _detect_unused_exports(
 
     return unused[:200]
 
+# Issue #228: Rust trait methods that are routinely invoked implicitly —
+# via `#[derive(...)]`, generic trait dispatch, or `..Default::default()`
+# spread syntax — so the CALLS graph never records an edge and they surface
+# as ref_count==0 false positives at a far higher rate than normal functions.
+# Names taken from std's most-implemented traits (Default, Clone, Debug/Display,
+# Drop, PartialEq/Eq, Hash, Ord, From/Into, TryFrom/TryInto, AsRef, Deref,
+# Iterator, ToString, FromStr, serde, and the common operator traits).
+_RUST_TRAIT_DEFAULT_METHODS = {
+    "default", "clone", "clone_from", "fmt", "drop", "eq", "ne", "hash",
+    "cmp", "partial_cmp", "from", "into", "try_from", "try_into",
+    "as_ref", "as_mut", "borrow", "borrow_mut", "deref", "deref_mut",
+    "next", "to_string", "to_owned", "from_str", "serialize", "deserialize",
+    "add", "sub", "mul", "div", "rem", "index", "index_mut", "neg", "not",
+}
+
+
 def _detect_dead_from_registry(
     workspace: str,
     same_file_usages: Dict[str, Set[str]] = None
@@ -2253,6 +2269,16 @@ def _detect_dead_from_registry(
             if node.get("component", False):
                 continue
 
+            # Issue #228: structural nodes are namespaces/containers, not
+            # callable entities. A module (`mod foo { ... }`, type == "module")
+            # is referenced by path, never "called". An impl block (synthetic
+            # `impl X` node, type == "impl", fn like `impl_X`, id like
+            # `file.rs:13:impl:X`) only groups methods — the methods inside are
+            # analyzed individually. Neither ever produces a CALLS edge, so both
+            # always show ref_count==0 and must never be flagged dead.
+            if node_type in ("module", "impl"):
+                continue
+
             # Issue #220: Skip symbols that are referenced within their own
             # file. The backend registry's ref_count is computed from CALLS
             # edges, which only capture function calls — not const/static
@@ -2272,9 +2298,18 @@ def _detect_dead_from_registry(
             # Skip Rust inline test modules/functions (#[cfg(test)] mod tests,
             # #[test] fn ...) — see _rust_symbol_is_test docstring above.
             if file_path.endswith('.rs'):
-                if node_type == "module" and bare_name == "tests":
-                    continue
                 if _rust_symbol_is_test(file_path, line):
+                    continue
+                # Issue #228: trait-method implementations (Default::default,
+                # Clone::clone, Debug::fmt, Drop::drop, PartialEq::eq,
+                # Hash::hash, etc.) are invoked implicitly through derive macros,
+                # generic trait dispatch, and `..Default::default()` spread —
+                # none of which the CALLS extractor can observe, so their
+                # false-positive rate is far higher than normal fns. Skip a
+                # targeted whitelist of well-known trait method names. This stays
+                # narrow: any standalone fn whose name is NOT on the list is
+                # still eligible for dead-code flagging.
+                if bare_name in _RUST_TRAIT_DEFAULT_METHODS:
                     continue
 
             # Skip test fixtures and example files
