@@ -186,6 +186,41 @@ class TestGraphAccuracyGolden:
             f"#219: expected a caller from mod_level.ts, got {callers}"
         )
 
+    def test_module_level_caller_visible_in_trace_up(self, scanned):
+        """#223: `trace --direction up` must surface the module-level caller.
+
+        `moduleLevelHelper` is called at the top level of mod_level.ts (not
+        inside any function). That caller has a synthetic `<file>:0:<module>`
+        source id with no `graph_nodes` row; before #223 it was dropped
+        silently. It must appear as a caller entry marked `module_level=True`
+        / `fn="<module>"`. Also pins #288's additive `trace_source` key.
+        """
+        ws, _ = scanned
+        from commands.trace import execute
+
+        class _Args:
+            name = "moduleLevelHelper"
+            direction = "up"
+            depth = 10
+            domain = "auto"
+            limit = 20
+            offset = 0
+            max_results = 1000
+            use_graph = True
+            deep = False
+            format = "json"
+
+        result = execute(_Args(), ws)
+        assert result.get("trace_source") == "graph", (
+            f"#288: zero-config trace must annotate trace_source=graph, got {result.get('trace_source')}"
+        )
+        up = result.get("chains", {}).get("up", [])
+        module_callers = [c for c in up if c.get("module_level") or c.get("fn") == "<module>"]
+        assert module_callers, (
+            f"#223 regression: module-level caller of moduleLevelHelper dropped from trace-up. "
+            f"up callers: {up}"
+        )
+
     def test_async_handler_wrapped_call_registers_edge(self, backend):
         """#231: getGoogleClient called inside asyncHandler(async ()=>{...})."""
         rc = _rc(backend, "getGoogleClient")
