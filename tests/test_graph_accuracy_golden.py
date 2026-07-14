@@ -133,6 +133,17 @@ pub fn first() -> &'static str { RED }
 pub fn second() -> &'static str { RED }
 """
 
+_INLINE_CALLBACK_TS = """\
+// Guards #210: a call inside an inline arrow callback passed directly to a
+// method (`.then(d => transformItem(d))`) must be walked — distinct from the
+// asyncHandler-wrapped case (#231). Before #210 the callback body was not
+// walked, undercounting transformItem's ref_count.
+export function transformItem(x: number): number { return x + 1; }
+export function run(): Promise<number> {
+  return fetch("/x").then(r => r.json()).then(d => transformItem(d));
+}
+"""
+
 _GENUINELY_DEAD_TS = """\
 // Control: a truly-unreferenced non-exported function IS dead. Guards against a
 // fix that "cures" false positives by never flagging anything dead.
@@ -149,6 +160,7 @@ def _build_workspace(tmp_path) -> str:
     (ws / "src" / "handler.ts").write_text(_ASYNC_HANDLER_TS)
     (ws / "src" / "svc.ts").write_text(_SVC_TS)
     (ws / "src" / "object_arrow.ts").write_text(_OBJECT_LITERAL_ARROW_TS)
+    (ws / "src" / "callback.ts").write_text(_INLINE_CALLBACK_TS)
     (ws / "src" / "same_file.rs").write_text(_SAME_FILE_USAGE_RS)
     (ws / "src" / "dead.ts").write_text(_GENUINELY_DEAD_TS)
     return str(ws)
@@ -228,6 +240,15 @@ class TestGraphAccuracyGolden:
         callers = _callers_of(backend, "getGoogleClient")
         assert any("handler.ts" in c for c in callers), (
             f"#231: expected a caller from handler.ts, got {callers}"
+        )
+
+    def test_inline_arrow_callback_call_counts_toward_rc(self, backend):
+        """#210: transformItem called inside `.then(d => transformItem(d))`."""
+        rc = _rc(backend, "transformItem")
+        assert rc >= 1, f"#210 regression: transformItem rc={rc}, expected >=1 (inline arrow callback)"
+        callers = _callers_of(backend, "transformItem")
+        assert any("callback.ts" in c for c in callers), (
+            f"#210: expected a caller from callback.ts, got {callers}"
         )
 
     def test_object_literal_arrow_registered_as_node(self, backend):
