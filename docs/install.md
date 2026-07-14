@@ -12,9 +12,9 @@ This installs the `codelens` console command and all core dependencies.
 After install, run:
 
 ```bash
-codelens init /path/to/your/project
-codelens scan /path/to/your/project
-codelens query MyFunction /path/to/your/project
+codelens scan /path/to/your/project                       # builds the graph (also auto-inits)
+codelens search "MyFunction" /path/to/your/project --mode symbol
+codelens context /path/to/your/project --check context --name MyFunction
 ```
 
 ### With optional features

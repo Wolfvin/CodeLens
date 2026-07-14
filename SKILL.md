@@ -43,9 +43,9 @@ codelens guard --pre --file X           →  DROPPED
 |---|---|
 | `scan` | scan (default) · rescan |
 | `search` | semantic (default) · symbol · regex · graph — **`pattern` comes first, workspace second**, opposite of every other command here |
-| `context` | orient (default) · outline · trace · context |
+| `context` | orient (default) · outline · trace · context · diagnostics (LSP lint, needs `--file`) · overview (token-efficient symbol map) |
 | `deps` | affected · dependents · circular (default: all three) · import-snapshot · export-snapshot |
-| `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect (default: all) |
+| `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css (deep CSS) · a11y (WCAG 2.1) (default: all) |
 | `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) |
 | `summary` | summary (default) · dashboard · arch-metrics · architecture |
 | `impact` | impact (default) · diff · dataflow |
