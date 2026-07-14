@@ -873,26 +873,49 @@ class TestArgparseFormatConflictRegression:
         assert "conflicting option string" not in result.stderr
 
     def test_scan_with_format_long_does_not_crash(self):
-        """``codelens scan . --format json`` must not raise argparse error."""
+        """``codelens scan <ws> --format json`` must not raise argparse error.
+
+        Uses a tiny throwaway workspace (not ``.``) so the scan finishes
+        fast — this test only verifies the ``--format`` argparse path, it
+        does not need to scan a real codebase.
+        """
         import subprocess
-        result = subprocess.run(
-            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-             "scan", ".", "--format", "json"],
-            capture_output=True, text=True, timeout=60,
-        )
+        import shutil
+        ws = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(ws, "trivial.py"), "w") as f:
+                f.write("x = 1\n")
+            result = subprocess.run(
+                [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+                 "scan", ws, "--format", "json"],
+                capture_output=True, text=True, timeout=60,
+            )
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
         assert "argparse.ArgumentError" not in result.stderr, (
             f"argparse error:\n{result.stderr[:500]}"
         )
         assert "conflicting option string" not in result.stderr
 
     def test_scan_with_format_short_does_not_crash(self):
-        """``codelens scan . -f json`` must not raise argparse error."""
+        """``codelens scan <ws> -f json`` must not raise argparse error.
+
+        Uses a tiny throwaway workspace (not ``.``) so the scan finishes
+        fast — this test only verifies the ``-f`` argparse path.
+        """
         import subprocess
-        result = subprocess.run(
-            [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-             "scan", ".", "-f", "json"],
-            capture_output=True, text=True, timeout=60,
-        )
+        import shutil
+        ws = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(ws, "trivial.py"), "w") as f:
+                f.write("x = 1\n")
+            result = subprocess.run(
+                [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
+                 "scan", ws, "-f", "json"],
+                capture_output=True, text=True, timeout=60,
+            )
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
         assert "argparse.ArgumentError" not in result.stderr, (
             f"argparse error:\n{result.stderr[:500]}"
         )

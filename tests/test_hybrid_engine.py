@@ -266,10 +266,10 @@ class TestDeepSingleInvocation:
             # is the post-#199 entry point. search is NOT in the --deep
             # supported list.
             proc = subprocess.run(
-                [sys.executable, "scripts/codelens.py",
+                [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
                  "search", "--mode", "symbol", "foo", ws, "--deep", "--format", "json"],
                 capture_output=True, text=True, timeout=60,
-                env={**os.environ, "PYTHONPATH": "scripts"},
+                env={**os.environ, "PYTHONPATH": SCRIPT_DIR},
             )
 
             # Should not crash, and should include the hint
