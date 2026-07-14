@@ -109,6 +109,16 @@ class BaseParser:
         # frees the Tree the node pointers dangle and accessing
         # ``node.children`` / ``node.start_point`` raises SIGSEGV (issue #116).
         self._last_tree = None
+        # Issue #267: Pre-computed line offsets for the most recently parsed
+        # source. ``_line_offsets[i]`` = byte offset where line ``i+1`` begins.
+        # Used by :meth:`get_line` to compute the 1-based line number from
+        # ``node.start_byte`` via bisect — avoids ``node.start_point`` access
+        # which can SIGSEGV non-deterministically in tree-sitter 0.26 (the
+        # binding's Point object does not hold a strong reference to the
+        # Node/Tree). Set by :meth:`parse` / :meth:`parse_tree`. ``None`` for
+        # legacy callers that don't use those methods (falls back to
+        # ``node.start_point.row`` — kept for backward compat but unsafe in 0.26).
+        self._line_offsets: Optional[List[int]] = None
 
     def parse(self, content: bytes) -> Node:
         """Parse source content and return root node.
@@ -122,6 +132,8 @@ class BaseParser:
         """
         tree = self.parser.parse(content)
         self._last_tree = tree
+        # Issue #267: pre-compute line offsets for safe line lookup.
+        self._line_offsets = self._compute_line_offsets(content)
         return tree.root_node
 
     def parse_tree(self, content: bytes):
@@ -132,17 +144,59 @@ class BaseParser:
         """
         tree = self.parser.parse(content)
         self._last_tree = tree
+        # Issue #267: pre-compute line offsets for safe line lookup.
+        self._line_offsets = self._compute_line_offsets(content)
         return tree
+
+    @staticmethod
+    def _compute_line_offsets(source: bytes) -> List[int]:
+        """Pre-compute byte offsets where each line begins (0-indexed).
+        ``line_offsets[i]`` = byte offset where line ``i+1`` begins.
+        Used by :meth:`get_line` for O(log n) line lookup by start_byte.
+        """
+        offsets = [0]
+        for i, b in enumerate(source):
+            if b == 0x0a:  # '\n'
+                offsets.append(i + 1)
+        return offsets
 
     @staticmethod
     def get_text(node: Node, source: bytes) -> str:
         """Get the text content of a node."""
         return source[node.start_byte:node.end_byte].decode('utf-8', errors='replace')
 
-    @staticmethod
-    def get_line(node: Node) -> int:
-        """Get 1-based line number of a node."""
+    def get_line(self, node: Node) -> int:
+        """Get 1-based line number of a node.
+
+        Issue #267: If ``self._line_offsets`` is set (populated by
+        :meth:`parse` / :meth:`parse_tree`), compute the line number from
+        ``node.start_byte`` via bisect — avoids ``node.start_point`` access
+        which can SIGSEGV non-deterministically in tree-sitter 0.26 (Point
+        objects don't hold a strong reference to the Node/Tree). Falls back
+        to ``node.start_point.row + 1`` for legacy callers that didn't
+        route through :meth:`parse` / :meth:`parse_tree` — this path is
+        unsafe in 0.26 and should be migrated.
+        """
+        import bisect
+        if self._line_offsets is not None:
+            return bisect.bisect_right(self._line_offsets, node.start_byte)
+        # Legacy fallback (unsafe in tree-sitter 0.26 — see issue #267).
         return node.start_point.row + 1
+
+    def get_line_from_byte(self, byte_offset: int) -> int:
+        """Get 1-based line number from a byte offset.
+
+        Issue #267: Companion to :meth:`get_line` for callers that need the
+        line of ``node.end_byte`` (avoiding ``node.end_point.row`` which has
+        the same 0.26 crash risk as ``node.start_point.row``). Uses the same
+        ``self._line_offsets`` bisect lookup. Falls back to -1 (invalid) if
+        ``_line_offsets`` is not set — callers should migrate to route
+        through :meth:`parse` / :meth:`parse_tree` first.
+        """
+        import bisect
+        if self._line_offsets is not None:
+            return bisect.bisect_right(self._line_offsets, byte_offset)
+        return -1  # Legacy fallback (caller should migrate — see issue #267).
 
     def walk_tree(self, node: Node, source: bytes, callback, depth=0, max_depth=50):
         """

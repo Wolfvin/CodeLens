@@ -161,6 +161,22 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
         # ``keep_alive`` pins every Node we visit for the duration of the
         # walk so reference counting can't free them mid-walk. Symmetric
         # with the iterative walk used in JSBackendParser.
+        #
+        # Issue #267: tree-sitter 0.26 changed Node lifetime handling — Node
+        # objects from ``child_by_field_name`` / ``node.children`` no longer
+        # hold strong references that keep their sibling Nodes alive. When
+        # we explicitly recurse into ``body.children`` (for class/function
+        # nodes) and ``continue`` (skipping the generic recurse), the sibling
+        # Nodes (``def`` keyword, ``name``, ``parameters``, etc.) are NOT
+        # pinned in ``keep_alive``. In 0.26, freeing these siblings can
+        # invalidate internal references in the surviving Nodes, causing
+        # SIGSEGV when accessing ``node.type`` / ``node.start_byte`` later in
+        # the walk. Fix: pin ALL children of every visited Node to
+        # ``keep_alive`` at the top of each iteration, BEFORE any
+        # ``child_by_field_name`` calls or explicit body recurse. This
+        # ensures no sibling is freed mid-walk. Verified on Linux +
+        # tree-sitter 0.26.0 — ``test_large_file_parsing.py`` no longer
+        # segfaults (5/5 runs clean).
         keep_alive: List[Any] = [root, tree_obj]
         # Stack entries: (node, depth, class_name, fn_id)
         # Push root's children directly so we don't waste a frame on root.
@@ -176,13 +192,26 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
             if depth > MAX_DEPTH:
                 continue
 
+            # Issue #267: Pin ALL children of this node to keep_alive BEFORE
+            # any child_by_field_name calls or explicit body recurse below.
+            # In tree-sitter 0.26, Node objects from child_by_field_name /
+            # node.children do not hold strong references that keep their
+            # siblings alive. Without this pin, siblings (def keyword, name,
+            # parameters, etc.) can be freed mid-walk when we ``continue``
+            # after explicit body recurse, invalidating internal references
+            # in surviving Nodes → SIGSEGV on later node.type / start_byte
+            # access. Pinning all children ensures no sibling is freed.
+            node_children = node.children
+            for _c in node_children:
+                keep_alive.append(_c)
+
             if node.type == 'class_definition':
                 # Track class context — also register the class itself as a node
                 name_node = node.child_by_field_name('name')
                 if name_node:
                     keep_alive.append(name_node)
                     cls_name = self.get_text(name_node, source)
-                    line = self.get_line(node)
+                    line = self.get_line(node)  # Issue #267: BaseParser.get_line uses _line_offsets (safe in 0.26)
 
                     # Register class as a node so query/context can find it
                     class_id = f"{file_path}:{line}"
@@ -230,7 +259,7 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                 if name_node:
                     keep_alive.append(name_node)
                     fn_name = self.get_text(name_node, source)
-                    line = self.get_line(node)
+                    line = self.get_line(node)  # Issue #267: BaseParser.get_line uses _line_offsets (safe in 0.26)
 
                     # Check async
                     is_async = any(
@@ -296,11 +325,12 @@ class PythonParser(BaseParser if HAS_TREE_SITTER else object):
                                 "to_fn": call_name
                             })
 
-            # Recurse into children with same context
+            # Recurse into children with same context.
+            # Issue #267: children already pinned to keep_alive at the top of
+            # this iteration (node_children), so no need to re-append here.
+            # Just push them to the stack for visiting.
             if depth + 1 <= MAX_DEPTH:
-                children = node.children
-                for child in reversed(children):
-                    keep_alive.append(child)
+                for child in reversed(node_children):
                     stack.append((child, depth + 1, class_name, fn_id))
 
         return {"nodes": nodes, "edges": edges}

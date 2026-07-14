@@ -39,11 +39,13 @@ classifiers = [
 ]
 
 dependencies = [
-    # Upper-bound <0.26: tree-sitter core 0.26.0 changed Node lifetime handling,
-    # causing a native use-after-free SIGSEGV in the grammar bindings even on
-    # shallow files (issue #235). Remove the cap once python_parser.py's
-    # keep_alive strategy is made 0.26-safe.
-    "tree-sitter>=0.21.0,<0.26",
+    # Issue #267: tree-sitter 0.26 cap removed — root cause (node.start_point
+    # SIGSEGV in 0.26 binding) fixed in BaseParser.get_line / get_line_from_byte
+    # via pre-computed line offsets + bisect on start_byte/end_byte. All
+    # parsers (python, js_backend, ts_backend, tsx, rust) migrated off
+    # node.start_point / node.end_point access. Verified on Linux +
+    # tree-sitter 0.26.0 — test_large_file_parsing.py 11/11 pass clean.
+    "tree-sitter>=0.21.0",
 ]
 
 [project.optional-dependencies]

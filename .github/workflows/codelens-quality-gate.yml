@@ -23,10 +23,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # tree-sitter pinned <0.26 (issue #235: 0.26 native segfault). Installing
-          # it makes `scan` use the fast tree-sitter path instead of the slow regex
+          # Issue #267: tree-sitter 0.26 cap removed — root cause fixed in BaseParser.
+          # tree-sitter makes `scan` use the fast tree-sitter path instead of the slow regex
           # fallback that hung the old double-scan Initialize/Scan steps.
-          pip install "tree-sitter>=0.21.0,<0.26" pyyaml
+          pip install "tree-sitter>=0.21.0" pyyaml
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
 

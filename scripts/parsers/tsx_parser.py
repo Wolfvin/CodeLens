@@ -274,8 +274,8 @@ class TSXParser(BaseParser):
                 "component": fn_name[0].isupper()  # React component convention
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
     def _parse_var_declarator(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
@@ -315,8 +315,8 @@ class TSXParser(BaseParser):
                 "component": fn_name[0].isupper()
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
     def _parse_class_decl(self, node: Node, source: bytes, file_path: str) -> Optional[Dict]:
@@ -356,8 +356,8 @@ class TSXParser(BaseParser):
                 "node_type": "class",
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
         if heritage:

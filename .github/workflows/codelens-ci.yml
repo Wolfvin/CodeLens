@@ -33,11 +33,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # tree-sitter pinned <0.26: core 0.26.0 changed Node lifetime handling
-          # and causes a native use-after-free SIGSEGV in tree_sitter_python._binding
-          # even on shallow files (issue #235). python_parser.py's keep_alive
-          # mitigation is insufficient for 0.26; 0.25.x is known-safe.
-          pip install "tree-sitter>=0.21.0,<0.26" pyyaml pytest pytest-cov pygls lsprotocol
+          # Issue #267: tree-sitter 0.26 cap removed — root cause (node.start_point
+          # SIGSEGV in 0.26 binding) fixed in BaseParser via line-offset bisect.
+          pip install "tree-sitter>=0.21.0" pyyaml pytest pytest-cov pygls lsprotocol
           # Install optional grammar packages for full parser coverage
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
@@ -69,7 +67,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "tree-sitter>=0.21.0,<0.26" pyyaml
+          pip install "tree-sitter>=0.21.0" pyyaml
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
 
@@ -99,7 +97,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "tree-sitter>=0.21.0,<0.26" pyyaml
+          pip install "tree-sitter>=0.21.0" pyyaml
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
 
