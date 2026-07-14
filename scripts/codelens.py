@@ -1445,16 +1445,21 @@ def main():
         )
 
     # ─── Auto-setup: if command needs registry and none exists, bootstrap it ────
-    # `scan` BUILDS the registry; `plugin`/`lsp` don't read it. Every other
-    # command — visible umbrella OR hidden leaf (list, query, ...) — consumes the
-    # registry and benefits from auto-setup when it's absent. Deriving the gate
-    # from this small exclusion set (rather than a hand-maintained allowlist)
-    # avoids the stale-list bug that let audit/security/deps/doctor and the hidden
-    # leaf commands slip through the gate (issue #244).
-    _NON_REGISTRY_COMMANDS = {"scan", "plugin", "lsp"}
+    # The 11 registry-consuming umbrellas (all except `scan`, which BUILDS it) plus
+    # the hidden leaf commands that read the registry directly (list/query/symbols).
+    # NOTE: keep this an explicit allowlist, NOT "every command except a few" — an
+    # over-broad gate makes EVERY command invocation auto-scan its workspace, which
+    # ballooned the test suite from ~164s to hours (each command-test scanning its
+    # fixture). #244 needed the umbrellas added; it did not need the whole hidden
+    # surface (check/analyze/entrypoints/...) to trigger scans.
+    _REGISTRY_COMMANDS = {
+        "search", "context", "deps", "audit", "security",
+        "summary", "impact", "api-map", "doctor", "history", "graph",
+        "list", "query", "symbols",
+    }
 
     auto_setup_info = None
-    if args.command not in _NON_REGISTRY_COMMANDS and not _registry_exists(workspace):
+    if args.command in _REGISTRY_COMMANDS and not _registry_exists(workspace):
         auto_setup_result = _auto_setup(workspace)
         if auto_setup_result.get("auto_setup") == "ok":
             auto_setup_info = {
