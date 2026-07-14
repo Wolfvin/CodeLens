@@ -66,6 +66,8 @@ class TSXParser(BaseParser):
                 self._process_jsx_attribute(node, source, file_path, classes, ids)
             elif node.type in ('jsx_opening_element', 'jsx_self_closing_element'):
                 self._process_jsx_component(node, source, file_path, fn_declarations, edges)
+            elif node.type == 'jsx_expression':
+                self._process_jsx_expression(node, source, file_path, fn_declarations, edges)
             elif node.type == 'call_expression':
                 call_info = self._parse_call(node, source, fn_declarations)
                 if call_info:
@@ -441,6 +443,88 @@ class TSXParser(BaseParser):
             "to_fn": component_name,
             "via_jsx": True
         })
+
+    def _process_jsx_expression(self, node: Node, source: bytes,
+                                 file_path: str, fn_declarations: List[Dict],
+                                 edges: List):
+        """Emit usage edges for functions referenced inside a JSX expression
+        container (issue #294).
+
+        In React, an event handler is passed by *reference* as a prop value —
+        ``onClick={handleClick}`` — not by call. The per-call passes only see
+        ``call_expression`` nodes, so a bare identifier reference produces zero
+        edges, leaving the handler with ``ref_count=0`` and false-flagged dead.
+
+        This handler counts two reference shapes as usage, but ONLY when the
+        identifier resolves to a function declared in this file (guarded by
+        ``declared``) — arbitrary identifiers, DOM props, and non-function names
+        are never counted:
+
+        1. Attribute value / child reference: ``onClick={handleClick}`` — the
+           expression's direct child is the identifier.
+        2. Callback argument: ``{items.map(renderItem)}`` — the identifier is
+           passed as an argument to a call.
+
+        Double-counting is avoided by:
+          - skipping the ``function`` position of a ``call_expression`` (those
+            are already emitted by :meth:`_parse_call`), walking only its
+            ``arguments``;
+          - not descending into nested ``jsx_expression`` nodes (the outer
+            tree walk visits each one on its own);
+          - skipping ``member_expression`` (e.g. ``items.map`` / ``this.x``).
+        """
+        declared = {d["node"]["fn"] for d in fn_declarations}
+        if not declared:
+            return
+
+        # Resolve the enclosing function (innermost scope) as the edge source.
+        expr_line = self.get_line(node)
+        caller_id = None
+        best_scope_size = float('inf')
+        for decl in fn_declarations:
+            if decl["scope_start"] <= expr_line - 1 <= decl["scope_end"]:
+                scope_size = decl["scope_end"] - decl["scope_start"]
+                if scope_size < best_scope_size:
+                    best_scope_size = scope_size
+                    caller_id = decl["node"]["id"]
+        if not caller_id:
+            return
+
+        seen = set()
+
+        def emit(name: str):
+            if name in seen:
+                return
+            if name in self.SKIP_NAMES or name not in declared:
+                return
+            seen.add(name)
+            edges.append({
+                "from": caller_id,
+                "to_fn": name,
+                "via_jsx_ref": True,
+            })
+
+        def walk(n: Node):
+            for child in n.children:
+                t = child.type
+                if t == 'jsx_expression':
+                    # Handled by the outer tree walk — avoid re-processing.
+                    continue
+                if t == 'identifier':
+                    emit(self.get_text(child, source))
+                elif t == 'call_expression':
+                    # Function position is already counted by _parse_call;
+                    # only inspect arguments for callback references.
+                    args = child.child_by_field_name('arguments')
+                    if args:
+                        walk(args)
+                elif t == 'member_expression':
+                    # e.g. items.map, this.handler — not a bare function ref.
+                    continue
+                else:
+                    walk(child)
+
+        walk(node)
 
     def _parse_call(self, node: Node, source: bytes,
                      fn_declarations: List[Dict]) -> Optional[Dict]:

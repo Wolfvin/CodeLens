@@ -153,6 +153,29 @@ used();
 """
 
 
+_JSX_HANDLER_TSX = """\
+// Guards #294: a function passed as a JSX prop value (onClick={handleClick}) is
+// a REFERENCE, not a call — before #294 it produced zero edges, so the handler
+// got rc=0 / status=dead (false positive on the primary React use case). A
+// function passed as a callback argument ({items.map(renderItem)}) must also
+// count. Genuinely-unused handlers must STILL be dead (control).
+function handleClick() { return 1; }
+function handleSubmit() { return 2; }
+function renderItem(x: number) { return x; }
+function directlyCalled() { return 3; }
+function unusedHandler() { return 4; }
+export function App({ items }: { items: number[] }) {
+  directlyCalled();
+  return (
+    <div onClick={handleClick}>
+      <form onSubmit={handleSubmit} />
+      <ul>{items.map(renderItem)}</ul>
+    </div>
+  );
+}
+"""
+
+
 _MODULE_LEVEL_CALL_PY = """\
 # Guards #291: Python calls at module top level (not inside any def/class) must
 # count toward the callee's rc — analogous to #219 for TS/JS. Before #291 the
@@ -191,6 +214,7 @@ def _build_workspace(tmp_path) -> str:
     (ws / "src" / "callback.ts").write_text(_INLINE_CALLBACK_TS)
     (ws / "src" / "same_file.rs").write_text(_SAME_FILE_USAGE_RS)
     (ws / "src" / "dead.ts").write_text(_GENUINELY_DEAD_TS)
+    (ws / "src" / "App.tsx").write_text(_JSX_HANDLER_TSX)
     return str(ws)
 
 
@@ -371,4 +395,33 @@ class TestGraphAccuracyGolden:
         assert nodes[0].get("ref_count", 0) == 0, (
             f"control: trulyUnusedInternal should have rc 0, got {nodes[0].get('ref_count')} — "
             "a fix that inflates rc to hide false-positives would break real dead-code detection"
+        )
+
+    def test_jsx_prop_handler_reference_counts_toward_rc(self, backend):
+        """#294: handlers passed as JSX prop values are USED, not dead."""
+        for fn in ("handleClick", "handleSubmit"):
+            rc = _rc(backend, fn)
+            assert rc >= 1, f"#294 regression: {fn} rc={rc}, expected >=1 (referenced via JSX prop)"
+            callers = _callers_of(backend, fn)
+            assert any("App.tsx" in c for c in callers), (
+                f"#294: expected a caller from App.tsx for {fn}, got {callers}"
+            )
+
+    def test_jsx_callback_argument_reference_counts_toward_rc(self, backend):
+        """#294: `{items.map(renderItem)}` — callback arg reference is usage."""
+        rc = _rc(backend, "renderItem")
+        assert rc >= 1, f"#294 regression: renderItem rc={rc}, expected >=1 (JSX callback arg)"
+
+    def test_jsx_direct_call_not_regressed(self, backend):
+        """#294 control: a directly-called function in the TSX file keeps rc>=1."""
+        rc = _rc(backend, "directlyCalled")
+        assert rc >= 1, f"#294: directlyCalled rc={rc}, expected >=1 (direct call must not regress)"
+
+    def test_jsx_genuinely_unused_handler_still_dead(self, backend):
+        """#294 control: a TSX function referenced nowhere IS still dead (rc 0)."""
+        nodes = _nodes_named(backend, "unusedHandler")
+        assert nodes, "control node unusedHandler missing"
+        assert nodes[0].get("ref_count", 0) == 0, (
+            f"#294 control: unusedHandler should have rc 0, got {nodes[0].get('ref_count')} — "
+            "the JSX-reference fix must not inflate rc for genuinely-unused handlers"
         )
