@@ -23,11 +23,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml
-
-      - name: Initialize CodeLens
-        run: |
-          python3 scripts/codelens.py scan .
+          # tree-sitter pinned <0.26 (issue #235: 0.26 native segfault). Installing
+          # it makes `scan` use the fast tree-sitter path instead of the slow regex
+          # fallback that hung the old double-scan Initialize/Scan steps.
+          pip install "tree-sitter>=0.21.0,<0.26" pyyaml
+          pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
+          pip install tree-sitter-typescript tree-sitter-rust || true
 
       - name: Scan codebase
         run: |
@@ -35,7 +36,7 @@ jobs:
 
       - name: Run quality gate
         run: |
-          python3 scripts/codelens.py audit . --check dead-code,smell,complexity --severity high
+          python3 scripts/codelens.py audit . --check dead-code,smell,complexity --severity high --format sarif > codelens-results.sarif
 
       - name: Upload SARIF results
         if: always()
