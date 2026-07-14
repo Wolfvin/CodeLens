@@ -546,8 +546,12 @@ class JSBackendParser(BaseParser):
                 "async": is_async
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            # Issue #267: compute scope lines from byte offsets via bisect on
+            # _line_offsets — avoid node.start_point/node.end_point access
+            # (tree-sitter 0.26 crash). get_line_from_byte returns -1 if
+            # _line_offsets not set (legacy fallback path).
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
     def _parse_variable_declarator(self, node: Node, source: bytes,
@@ -590,8 +594,9 @@ class JSBackendParser(BaseParser):
                 "async": is_async
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            # Issue #267: compute scope lines from byte offsets (0.26-safe).
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
     def _parse_class_decl(self, node: Node, source: bytes,
@@ -638,8 +643,9 @@ class JSBackendParser(BaseParser):
                 "node_type": "class",
             },
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            # Issue #267: compute scope lines from byte offsets (0.26-safe).
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
         if heritage:

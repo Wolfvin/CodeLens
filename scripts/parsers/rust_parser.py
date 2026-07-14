@@ -464,8 +464,8 @@ class RustParser(BaseParser):
         return {
             "node": node_data,
             "body_node": body_node,
-            "scope_start": node.start_point.row,
-            "scope_end": node.end_point.row
+            "scope_start": self.get_line_from_byte(node.start_byte) - 1,
+            "scope_end": self.get_line_from_byte(node.end_byte) - 1
         }
 
     def _find_calls_in_body(self, body_node: Node, source: bytes) -> List[Dict]:
