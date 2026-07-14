@@ -400,6 +400,56 @@ class HybridEngine:
             pass
         return None, None
 
+    def find_references_for_symbol(self, symbol_name: str) -> Optional[List[Dict]]:
+        """Resolve ``symbol_name`` to its definition, then ask the LSP server
+        for its references (issue #255 — LSP-backed trace-up precision).
+
+        Reuses the existing ``lsp_client.find_references`` +
+        ``_find_symbol_definition`` + ``_find_symbol_char`` machinery — no new
+        LSP infrastructure. Returns a list of reference dicts::
+
+            {"file": <abs path>, "line": <1-indexed>, "character": <int>}
+
+        excluding the definition site itself (the caller wants callers, not the
+        declaration). Returns ``None`` when LSP is not active or the symbol
+        cannot be resolved/located, so the caller can distinguish "no LSP path"
+        from "LSP ran and found zero references" (empty list). Never raises.
+        """
+        if not self.lsp_active:
+            return None
+        def_file, def_line = self._find_symbol_definition(symbol_name)
+        if not def_file or not def_line:
+            return None
+        abs_def = def_file if os.path.isabs(def_file) else os.path.join(self.workspace, def_file)
+        if not os.path.exists(abs_def):
+            return None
+        self.open_file_for_lsp(abs_def)
+        client = self.get_lsp_client(abs_def)
+        if not client:
+            return None
+        char = self._find_symbol_char(abs_def, def_line, symbol_name)
+        if char is None:
+            char = 0
+        lsp_line = max(0, def_line - 1)
+        try:
+            raw = client.find_references(abs_def, lsp_line, char, include_declaration=False)
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        external = self._filter_external_references(raw, abs_def, lsp_line, char)
+        out: List[Dict] = []
+        for ref in external:
+            ref_uri = ref.get("uri", "")
+            ref_path = _uri_to_path(ref_uri) if ref_uri else ""
+            start = ref.get("range", {}).get("start", {})
+            out.append({
+                "file": ref_path,
+                "line": start.get("line", 0) + 1,   # LSP 0-indexed -> report 1-indexed
+                "character": start.get("character", 0),
+            })
+        return out
+
 
 def _paths_match(path_a: str, path_b: str) -> bool:
     """Compare two file paths for equality using normalized absolute paths.
