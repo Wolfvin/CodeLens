@@ -64,6 +64,16 @@ def execute(args, workspace):
         max_results=args.max_results,
         use_graph=use_graph,
     )
+    # Issue #255: opt-in LSP-backed find-references for trace-up precision.
+    # Only when --deep is active AND an LSP server is available AND we are
+    # tracing callers (up/both). Otherwise the graph path above is used
+    # unchanged (zero-config, no regression, no hang).
+    if isinstance(result, dict) and getattr(args, "deep", False) \
+            and args.direction in ("up", "both"):
+        _apply_lsp_trace_up(args.name, workspace, result)
+    else:
+        if isinstance(result, dict):
+            result.setdefault("trace_source", "graph")
     # Apply pagination to chains.up and chains.down (issue #17).
     if isinstance(result, dict) and isinstance(result.get("chains"), dict):
         chains = result["chains"]
@@ -80,5 +90,56 @@ def execute(args, workspace):
         result["offset"] = offset
         result["limit"] = limit
     return result
+
+def _apply_lsp_trace_up(name, workspace, result):
+    """Replace ``result['chains']['up']`` with LSP-derived references when a
+    language server is available (issue #255).
+
+    Annotates ``result['trace_source']`` as ``"lsp"`` on success or ``"graph"``
+    when LSP is unavailable / cannot resolve the symbol, so consumers know the
+    precision source. Falls back to the graph chains (leaves them untouched) on
+    any failure — LSP is a precision enhancement, never a hard dependency.
+    """
+    graph_up = result.get("chains", {}).get("up", []) if isinstance(result.get("chains"), dict) else []
+    try:
+        from hybrid_engine import create_hybrid_engine
+        engine = create_hybrid_engine(workspace, deep=True)
+    except Exception:
+        result["trace_source"] = "graph"
+        return
+    try:
+        if not engine.lsp_active:
+            result["trace_source"] = "graph"
+            result.setdefault("lsp_available", False)
+            return
+        refs = engine.find_references_for_symbol(name)
+    finally:
+        engine.cleanup()
+
+    result["lsp_available"] = True
+    if refs is None:
+        # LSP active but symbol unresolved / no references list — keep graph.
+        result["trace_source"] = "graph"
+        return
+
+    lsp_up = []
+    for ref in refs:
+        lsp_up.append({
+            "fn": "",
+            "file": ref.get("file", ""),
+            "line": ref.get("line", 0),
+            "depth": 1,
+            "source": "lsp",
+        })
+    if isinstance(result.get("chains"), dict):
+        result["chains"]["up"] = lsp_up
+    else:
+        result["chains"] = {"up": lsp_up, "down": []}
+    result["trace_source"] = "lsp"
+    result["graph_callers_found"] = len(graph_up)
+    result["lsp_callers_found"] = len(lsp_up)
+    stats = result.setdefault("stats", {})
+    stats["callers_found"] = len(lsp_up)
+
 
 # Issue #199: deprecated "trace" alias registration removed; this module is now an implementation module imported by the "context" umbrella command.
