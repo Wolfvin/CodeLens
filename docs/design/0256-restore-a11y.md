@@ -54,10 +54,20 @@ count at exactly 12.
 
 ## Testing
 
-Verified end-to-end via CLI: `codelens audit tests --check a11y` → 2 real
-findings (missing_label high + semantic_html low) from `tests/fixtures/sample.html`.
-`--severity high` passthrough confirmed. `tests/test_command_registry.py`
-2 passed.
+`tests/test_a11y_command.py` (6 tests): wrapper delegation,
+severity/category passthrough, audit umbrella dispatch of `a11y`, category
+reaching the engine through the synthetic namespace, and a regression guard
+that `css` (#251) and `a11y` coexist independently (neither shadowing the
+other in `_CHECKS`).
+
+Verified end-to-end on the real Coretax `smart-tax-assistance` workspace
+(not just a fixture): `audit . --check a11y` → **165 findings** across
+semantic_html (94), link_text (35), missing_label (24), keyboard_nav (5),
+missing_alt (4), color_contrast (3). `--category missing_alt` correctly
+narrows to 4, confirming passthrough reaches the engine.
+
+The engine was confirmed working *before* wiring (per the issue's
+constraint), so this PR is pure entry-point restoration.
 
 ## Alternatives Considered
 
