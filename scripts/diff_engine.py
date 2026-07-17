@@ -8,11 +8,15 @@ import json
 import os
 import copy
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Set, Tuple
 from utils import logger
 
 
 SNAPSHOTS_DIR = ".codelens/snapshots"
+
+# Cap on per-edge detail entries. Counts stay exact; a file rename can shift
+# thousands of pairs at once, which would otherwise flood the output.
+EDGE_DETAIL_CAP = 100
 
 
 def save_snapshot(workspace: str, frontend: Dict, backend: Dict) -> str:
@@ -123,7 +127,9 @@ def diff_snapshots(
         "changed": frontend_diff["changed_count"] + backend_diff["changed_count"],
         "new_collisions": len(frontend_diff.get("new_collisions", [])),
         "new_dead": len(frontend_diff.get("new_dead", [])) + len(backend_diff.get("new_dead", [])),
-        "resolved_dead": len(frontend_diff.get("resolved_dead", [])) + len(backend_diff.get("resolved_dead", []))
+        "resolved_dead": len(frontend_diff.get("resolved_dead", [])) + len(backend_diff.get("resolved_dead", [])),
+        "edges_added": backend_diff.get("added_edge_count", 0),
+        "edges_removed": backend_diff.get("removed_edge_count", 0)
     }
 
     return {
@@ -169,7 +175,9 @@ def diff_current_vs_last(workspace: str) -> Dict[str, Any]:
         "changed": frontend_diff["changed_count"] + backend_diff["changed_count"],
         "new_collisions": len(frontend_diff.get("new_collisions", [])),
         "new_dead": len(frontend_diff.get("new_dead", [])) + len(backend_diff.get("new_dead", [])),
-        "resolved_dead": len(frontend_diff.get("resolved_dead", [])) + len(backend_diff.get("resolved_dead", []))
+        "resolved_dead": len(frontend_diff.get("resolved_dead", [])) + len(backend_diff.get("resolved_dead", [])),
+        "edges_added": backend_diff.get("added_edge_count", 0),
+        "edges_removed": backend_diff.get("removed_edge_count", 0)
     }
 
     return {
@@ -300,10 +308,120 @@ def _diff_frontend(old: Dict, new: Dict) -> Dict:
     }
 
 
+def _node_key(node: Dict) -> Tuple[str, str, str]:
+    """
+    Line-independent identity for a node: (file, owner, fn).
+
+    Node ids embed a line number (`engine.py:167`), so keying by raw id treats
+    a function that merely shifted lines as a different function. `impl_for`
+    (the owning class/struct) separates same-named methods that share a file.
+    Values are normalised to strings so a missing owner still sorts against a
+    present one.
+    """
+    return (
+        node.get("file") or "",
+        node.get("impl_for") or "",
+        node.get("fn") or node.get("id") or ""
+    )
+
+
+def _index_nodes(nodes: List[Dict]) -> Dict[Tuple, Dict]:
+    """
+    Map line-independent identity -> node, disambiguating exact duplicates.
+
+    A handful of functions share (file, owner, fn) — closures like `visit` or
+    `_walk` redefined in the same scope, which the registry already flags as
+    `duplicate_define`. Collapsing them would hide a real deletion, so each
+    gets an occurrence index assigned in line order. A pure line shift moves
+    them together, leaving the indices — and therefore the keys — stable.
+    """
+    index: Dict[Tuple, Dict] = {}
+    seen: Dict[Tuple, int] = {}
+
+    for node in sorted(
+        nodes,
+        key=lambda n: (n.get("file") or "", n.get("line") or 0, n.get("fn") or "")
+    ):
+        base = _node_key(node)
+        occurrence = seen.get(base, 0)
+        seen[base] = occurrence + 1
+        index[base + (occurrence,)] = node
+
+    return index
+
+
+def _endpoint_key(node_id: str, node_map: Dict) -> Tuple[str, str, str]:
+    """
+    Line-independent identity for an edge endpoint.
+
+    Ids that resolve to no node — module-level synthetic sources like
+    `app.py:0:<module>` deliberately carry no node — fall back to the id
+    itself, which is already line-independent.
+    """
+    node = node_map.get(node_id)
+    if not node:
+        return ("", "", node_id)
+    return _node_key(node)
+
+
+def _split_edges(
+    registry: Dict,
+    node_map: Dict
+) -> Tuple[Set[Tuple[Tuple, Tuple]], int]:
+    """
+    Split a backend registry's edges into resolved call pairs and an
+    unresolved tally.
+
+    Resolved edges carry `to` (a node id); unresolved ones carry only `to_fn`
+    (a bare name, overwhelmingly stdlib/builtin like `append` or `strip`) and
+    are counted rather than enumerated. Pairs form a set, not a multiset: the
+    same caller/callee is recorded once per call site, and call-site count is
+    not graph shape. `via_self` is a qualifier, so it stays out of identity.
+    """
+    resolved: Set[Tuple[Tuple, Tuple]] = set()
+    unresolved = 0
+
+    for edge in registry.get("edges", []):
+        if "to" in edge:
+            resolved.add((
+                _endpoint_key(edge.get("from"), node_map),
+                _endpoint_key(edge["to"], node_map)
+            ))
+        elif "to_fn" in edge:
+            unresolved += 1
+
+    return resolved, unresolved
+
+
+def _endpoint_label(key: Tuple[str, str, str]) -> str:
+    """Render an endpoint key as `Owner.fn`, or just `fn` when unowned."""
+    _file, owner, fn = key
+    return f"{owner}.{fn}" if owner else fn
+
+
+def _format_edges(pairs: Set[Tuple[Tuple, Tuple]]) -> Tuple[List[Dict[str, str]], bool]:
+    """Render edge pairs as capped, deterministically ordered detail entries."""
+    ordered = sorted(pairs)
+    detail = [
+        {
+            "from": _endpoint_label(src),
+            "from_file": src[0],
+            "to": _endpoint_label(dst),
+            "to_file": dst[0]
+        }
+        for src, dst in ordered[:EDGE_DETAIL_CAP]
+    ]
+    return detail, len(ordered) > EDGE_DETAIL_CAP
+
+
 def _diff_backend(old: Dict, new: Dict) -> Dict:
     """Diff two backend registries."""
-    old_nodes = {n["id"]: n for n in old.get("nodes", [])}
-    new_nodes = {n["id"]: n for n in new.get("nodes", [])}
+    # Two views of the same nodes: by raw id for edge endpoint resolution,
+    # by line-independent identity for the node diff itself.
+    old_by_id = {n["id"]: n for n in old.get("nodes", [])}
+    new_by_id = {n["id"]: n for n in new.get("nodes", [])}
+    old_nodes = _index_nodes(old.get("nodes", []))
+    new_nodes = _index_nodes(new.get("nodes", []))
 
     added_nodes = []
     removed_nodes = []
@@ -341,6 +459,15 @@ def _diff_backend(old: Dict, new: Dict) -> Dict:
         if changes:
             changed_nodes.append({"name": new_n["fn"], "file": new_n.get("file", ""), **changes})
 
+    old_edges, old_unresolved = _split_edges(old, old_by_id)
+    new_edges, new_unresolved = _split_edges(new, new_by_id)
+
+    added_edge_pairs = new_edges - old_edges
+    removed_edge_pairs = old_edges - new_edges
+
+    added_edges, added_truncated = _format_edges(added_edge_pairs)
+    removed_edges, removed_truncated = _format_edges(removed_edge_pairs)
+
     return {
         "added_nodes": added_nodes,
         "removed_nodes": removed_nodes,
@@ -349,7 +476,20 @@ def _diff_backend(old: Dict, new: Dict) -> Dict:
         "removed_count": len(removed_nodes),
         "changed_count": len(changed_nodes),
         "new_dead": new_dead,
-        "resolved_dead": resolved_dead
+        "resolved_dead": resolved_dead,
+        "added_edges": added_edges,
+        "removed_edges": removed_edges,
+        "added_edges_truncated": added_truncated,
+        "removed_edges_truncated": removed_truncated,
+        "added_edge_count": len(added_edge_pairs),
+        "removed_edge_count": len(removed_edge_pairs),
+        # `before`/`after`, not `from`/`to`: those already mean an edge's
+        # endpoints here, and reusing them for snapshot sides reads as a bug.
+        "unresolved_edges": {
+            "before": old_unresolved,
+            "after": new_unresolved,
+            "delta": new_unresolved - old_unresolved
+        }
     }
 
 
