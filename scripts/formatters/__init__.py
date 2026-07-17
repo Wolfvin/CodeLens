@@ -47,6 +47,33 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
             "suggestion": data.get("suggestion", ""),
         })
 
+    # Umbrella envelope {s, st, r:[...]} (the #195 consolidation): normalize
+    # each sub-result and merge, so `ai` consumers get the data instead of an
+    # empty items list. Stats are namespaced per sub-check to avoid collisions
+    # when several checks run at once (issue #306).
+    sub_results = data.get("r")
+    if isinstance(sub_results, list) and "st" in data:
+        merged_items = []
+        merged_stats = {}
+        for sub in sub_results:
+            if not isinstance(sub, dict):
+                continue
+            check = sub.get("_check", "")
+            norm = _normalize_to_ai(sub, check or command)
+            merged_items.extend(norm.get("items", []))
+            sub_stats = norm.get("stats", {})
+            if sub_stats:
+                merged_stats[check or "result"] = sub_stats
+        return stamp_schema_version({
+            "status": "ok" if data.get("s", "ok") != "error" else "error",
+            "command": command,
+            "stats": merged_stats,
+            "items": merged_items,
+            "truncated": False,
+            "recommendations": [],
+            "metadata": {"checks": data.get("st", {})},
+        })
+
     result = {
         "status": status,
         "command": command,
@@ -79,6 +106,10 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     elif "identity" in data and "registry_stats" in data:
         # summary
         stats.update(data["registry_stats"])
+    elif isinstance(data.get("summary"), dict):
+        # Generic: many sub-checks (tags, diff) carry a flat `summary` dict.
+        # Last resort so it never shadows a more specific stats source above.
+        stats.update(data["summary"])
 
     result["stats"] = stats
 
@@ -90,7 +121,7 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     _ITEM_KEYS = [
         "functions", "findings", "leaks", "hints", "issues",
         "matches", "violations", "entrypoints", "routes", "stores",
-        "results", "ownership_summary", "chains",
+        "results", "ownership_summary", "chains", "flows",
         "by_category", "top_priority", "actionable_items",
     ]
 
