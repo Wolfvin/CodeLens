@@ -11,6 +11,7 @@ Covers, against a synthetic fixture tree:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -131,6 +132,74 @@ def test_bare_flow_lists_every_flow(tree):
     names = {f["name"] for f in out["flows"]}
     assert {"PAYMENT", "PURE"} <= names
     assert out["summary"]["distinct_flows"] == len(out["flows"])
+
+
+# ─── subgraph: call-edges among members (issue #311) ─────
+
+def test_no_graph_db_degrades_to_flat_list(tree):
+    """A workspace that was never scanned yields members but no edges."""
+    out = _run(tree, "PAYMENT")
+    assert out["members"]                 # still collected
+    assert out["edges"] == []             # graceful: no DB, no edges
+
+
+def _populate_graph(root, nodes, edges):
+    cl = os.path.join(root, ".codelens")
+    os.makedirs(cl, exist_ok=True)
+    with open(os.path.join(cl, "backend.json"), "w", encoding="utf-8") as f:
+        json.dump({"nodes": nodes, "edges": edges}, f)
+    import graph_model as gm
+    gm.populate_graph_tables(root)
+
+
+def test_subgraph_edges_among_members(tmp_path):
+    root = str(tmp_path)
+    _write(root, "routes.py",
+           'def checkout(req):\n    """\n    @FLOW: PAY\n    """\n    return validate(req)\n')
+    _write(root, "cart.py",
+           'def validate(c):\n    """\n    @FLOW: PAY\n    """\n    return charge(c)\n')
+    _write(root, "gw.py",
+           'def charge(c):\n    """\n    @FLOW: PAY\n    """\n    return 1\n')
+    _populate_graph(
+        root,
+        nodes=[
+            {"id": "routes.py:1", "fn": "checkout", "file": "routes.py", "line": 1,
+             "ref_count": 0, "status": "active"},
+            {"id": "cart.py:1", "fn": "validate", "file": "cart.py", "line": 1,
+             "ref_count": 1, "status": "active"},
+            {"id": "gw.py:1", "fn": "charge", "file": "gw.py", "line": 1,
+             "ref_count": 1, "status": "active"},
+        ],
+        edges=[
+            {"from": "routes.py:1", "to": "cart.py:1"},
+            {"from": "cart.py:1", "to": "gw.py:1"},
+        ],
+    )
+
+    out = _run(root, "PAY")
+    pairs = {(e["from"], e["to"]) for e in out["edges"]}
+    assert pairs == {("checkout", "validate"), ("validate", "charge")}
+
+
+def test_subgraph_excludes_edges_leaving_the_flow(tmp_path):
+    """An edge to a function outside the flow must not appear."""
+    root = str(tmp_path)
+    _write(root, "a.py",
+           'def a():\n    """\n    @FLOW: F\n    """\n    return helper()\n')
+    _write(root, "h.py", 'def helper():\n    return 1\n')  # not tagged
+    _populate_graph(
+        root,
+        nodes=[
+            {"id": "a.py:1", "fn": "a", "file": "a.py", "line": 1,
+             "ref_count": 0, "status": "active"},
+            {"id": "h.py:1", "fn": "helper", "file": "h.py", "line": 1,
+             "ref_count": 1, "status": "active"},
+        ],
+        edges=[{"from": "a.py:1", "to": "h.py:1"}],
+    )
+
+    out = _run(root, "F")
+    assert out["edges"] == []             # helper is outside the flow
 
 
 if __name__ == "__main__":

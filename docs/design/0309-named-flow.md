@@ -79,9 +79,11 @@ join with call-edges) and is the piece to delegate.
 
 - **No writing.** Consistent with #305 — deciding a flow's membership is
   authorship, which belongs to the agent.
-- **No call-edges among members (yet).** Showing *how* members connect (the
-  flow subgraph) needs graph resolution; it is the natural phase-2 alongside
-  option (A) and #297 edge-diff ("did the PAYMENT flow's shape change?").
+- ~~No call-edges among members (yet).~~ **Shipped in #311** — `--name X` now
+  includes `edges: [{from, to}]` among members, resolved read-only via
+  `graph_model.query_callees` filtered to the member set (graceful: no graph DB
+  → flat list). The remaining subgraph work is only its pairing with #297
+  edge-diff ("did the PAYMENT flow's shape change between two checkpoints?").
 - **Enclosing-symbol resolution is heuristic**, not a parser. It resolves the
   common docstring and comment-above-def idioms; an unusual layout falls back
   to the file rather than guessing wrong.

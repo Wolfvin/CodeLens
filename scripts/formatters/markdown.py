@@ -169,6 +169,12 @@ def _md_flow(data: Dict, lines: list) -> None:
         lines.append("")
         for m in data.get("members", []):
             lines.append(_member_line(m))
+        edges = data.get("edges", [])
+        if edges:
+            lines.append("")
+            lines.append("### Call chain")
+            for e in edges:
+                lines.append(f"- `{e.get('from', '')}` → `{e.get('to', '')}`")
         return
 
     # Inventory of all flows.
