@@ -308,27 +308,60 @@ def _diff_frontend(old: Dict, new: Dict) -> Dict:
     }
 
 
+def _node_key(node: Dict) -> Tuple[str, str, str]:
+    """
+    Line-independent identity for a node: (file, owner, fn).
+
+    Node ids embed a line number (`engine.py:167`), so keying by raw id treats
+    a function that merely shifted lines as a different function. `impl_for`
+    (the owning class/struct) separates same-named methods that share a file.
+    Values are normalised to strings so a missing owner still sorts against a
+    present one.
+    """
+    return (
+        node.get("file") or "",
+        node.get("impl_for") or "",
+        node.get("fn") or node.get("id") or ""
+    )
+
+
+def _index_nodes(nodes: List[Dict]) -> Dict[Tuple, Dict]:
+    """
+    Map line-independent identity -> node, disambiguating exact duplicates.
+
+    A handful of functions share (file, owner, fn) — closures like `visit` or
+    `_walk` redefined in the same scope, which the registry already flags as
+    `duplicate_define`. Collapsing them would hide a real deletion, so each
+    gets an occurrence index assigned in line order. A pure line shift moves
+    them together, leaving the indices — and therefore the keys — stable.
+    """
+    index: Dict[Tuple, Dict] = {}
+    seen: Dict[Tuple, int] = {}
+
+    for node in sorted(
+        nodes,
+        key=lambda n: (n.get("file") or "", n.get("line") or 0, n.get("fn") or "")
+    ):
+        base = _node_key(node)
+        occurrence = seen.get(base, 0)
+        seen[base] = occurrence + 1
+        index[base + (occurrence,)] = node
+
+    return index
+
+
 def _endpoint_key(node_id: str, node_map: Dict) -> Tuple[str, str, str]:
     """
-    Line-independent identity for an edge endpoint: (file, owner, fn).
+    Line-independent identity for an edge endpoint.
 
-    Node ids embed a line number (`engine.py:167`), so keying edges by raw id
-    reports every edge of a function that merely shifted lines as removed and
-    re-added. Resolving through the node map to (file, impl_for, fn) drops that
-    churn. `impl_for` (the owning class/struct) separates same-named methods
-    that share a file. Ids that resolve to no node — module-level synthetic
-    sources like `app.py:0:<module>` deliberately carry no node — fall back to
-    the id itself, which is already line-independent.
+    Ids that resolve to no node — module-level synthetic sources like
+    `app.py:0:<module>` deliberately carry no node — fall back to the id
+    itself, which is already line-independent.
     """
     node = node_map.get(node_id)
     if not node:
         return ("", "", node_id)
-    # Normalise to strings: a missing owner must sort against a present one.
-    return (
-        node.get("file") or "",
-        node.get("impl_for") or "",
-        node.get("fn") or node_id
-    )
+    return _node_key(node)
 
 
 def _split_edges(
@@ -383,8 +416,12 @@ def _format_edges(pairs: Set[Tuple[Tuple, Tuple]]) -> Tuple[List[Dict[str, str]]
 
 def _diff_backend(old: Dict, new: Dict) -> Dict:
     """Diff two backend registries."""
-    old_nodes = {n["id"]: n for n in old.get("nodes", [])}
-    new_nodes = {n["id"]: n for n in new.get("nodes", [])}
+    # Two views of the same nodes: by raw id for edge endpoint resolution,
+    # by line-independent identity for the node diff itself.
+    old_by_id = {n["id"]: n for n in old.get("nodes", [])}
+    new_by_id = {n["id"]: n for n in new.get("nodes", [])}
+    old_nodes = _index_nodes(old.get("nodes", []))
+    new_nodes = _index_nodes(new.get("nodes", []))
 
     added_nodes = []
     removed_nodes = []
@@ -422,8 +459,8 @@ def _diff_backend(old: Dict, new: Dict) -> Dict:
         if changes:
             changed_nodes.append({"name": new_n["fn"], "file": new_n.get("file", ""), **changes})
 
-    old_edges, old_unresolved = _split_edges(old, old_nodes)
-    new_edges, new_unresolved = _split_edges(new, new_nodes)
+    old_edges, old_unresolved = _split_edges(old, old_by_id)
+    new_edges, new_unresolved = _split_edges(new, new_by_id)
 
     added_edge_pairs = new_edges - old_edges
     removed_edge_pairs = old_edges - new_edges
