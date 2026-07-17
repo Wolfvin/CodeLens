@@ -62,6 +62,10 @@ _CHECKS = {
         "module": "commands.tags",
         "help": "Audit @FLOW/@ENTRY/@PART doc-tags: flow inventory, header coverage, untagged files (issue #305)",
     },
+    "flow": {
+        "module": "commands.flow",
+        "help": "Collect a named @FLOW's scattered functions into one view (--name X; issue #309)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -79,6 +83,7 @@ def add_args(parser):
         "  diagnostics LSP lint/errors/warnings for a file (needs --file, issue #253)\n"
         "  overview    Token-efficient hierarchical symbols map (issue #254)\n"
         "  tags        Audit @FLOW/@ENTRY/@PART doc-tags (issue #305)\n"
+        "  flow        Collect a named @FLOW's scattered functions (--name X, issue #309)\n"
         "\n"
         "Examples:\n"
         "  codelens context .                                  # orient (default)\n"
@@ -89,6 +94,8 @@ def add_args(parser):
         "  codelens context . --check overview                 # workspace symbol map\n"
         "  codelens context . --check overview --file src/auth.ts\n"
         "  codelens context . --check tags                     # doc-tag audit\n"
+        "  codelens context . --check flow                     # list all named flows\n"
+        "  codelens context . --check flow --name PAYMENT      # collect one flow\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")
@@ -178,6 +185,8 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
     elif check_name == "overview":
         ns.file = getattr(base_args, "file", None)
         ns.max_files = getattr(base_args, "max_files", None) or 200
+    elif check_name == "flow":
+        ns.name = getattr(base_args, "name", None)
     return ns
 
 

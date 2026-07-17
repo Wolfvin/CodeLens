@@ -95,6 +95,21 @@ class TestAiEnvelope(unittest.TestCase):
 
         self.assertIn("checks", out["metadata"])
 
+    def test_named_flow_members_become_items(self):
+        """A single flow's members must surface as ai items (issue #309)."""
+        flow_sub = {
+            "status": "ok", "_check": "flow", "flow": "PAYMENT", "found": True,
+            "count": 2,
+            "members": [
+                {"symbol": "charge", "file": "gw.js", "line": 2},
+                {"symbol": "validate", "file": "cart.py", "line": 1},
+            ],
+        }
+        out = _normalize_to_ai(_envelope(flow_sub), "context")
+
+        self.assertEqual(len(out["items"]), 2)
+        self.assertEqual({i["symbol"] for i in out["items"]}, {"charge", "validate"})
+
 
 if __name__ == "__main__":
     unittest.main()

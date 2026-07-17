@@ -105,7 +105,7 @@ codelens search "pattern" . --mode regex --limit 5 --offset 10 --format compact
 |---|---|
 | `scan` | scan (default) · rescan |
 | `search "pattern" [workspace]` | semantic (default) · symbol · regex · graph — **pattern first, workspace second**, opposite of every command below |
-| `context [workspace]` | orient (default) · outline · trace (`--name X --direction up\|down\|both`) · context (`--name X`) · diagnostics (`--file X`, LSP) · overview (symbol map) · tags (doc-tag audit) |
+| `context [workspace]` | orient (default) · outline · trace (`--name X --direction up\|down\|both`) · context (`--name X`) · diagnostics (`--file X`, LSP) · overview (symbol map) · tags (doc-tag audit) · flow (`--name X`, collect named flow) |
 | `deps [workspace]` | affected (`--files ...`) · dependents (`--files ...`) · circular · import-snapshot (`--input path.gz`) · export-snapshot (`--output path.gz`) |
 | `audit [workspace]` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css · a11y |
 | `security [workspace]` | secrets · vuln-scan · taint · binary-scan · regex-audit |

@@ -141,11 +141,45 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_analyze(data, lines)
     elif command == "tags":
         _md_tags(data, lines)
+    elif command == "flow":
+        _md_flow(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
+
+
+def _md_flow(data: Dict, lines: list) -> None:
+    """Markdown for the named-flow view (`context --check flow`, issue #309)."""
+    def _member_line(m: Dict) -> str:
+        symbol = m.get("symbol") or "(file)"
+        return f"- `{symbol}` — {m.get('file', '')}:{m.get('line', '')}"
+
+    if "flow" in data:
+        # Single named flow.
+        name = data.get("flow", "")
+        if not data.get("found"):
+            lines.append(f"## Flow: `{name}` — not found")
+            lines.append("")
+            lines.append(data.get("message", ""))
+            return
+        n = data.get("count", 0)
+        lines.append(f"## Flow: `{name}` ({n} function{'' if n == 1 else 's'})")
+        lines.append("")
+        for m in data.get("members", []):
+            lines.append(_member_line(m))
+        return
+
+    # Inventory of all flows.
+    flows = data.get("flows", [])
+    lines.append(f"## Named Flows ({len(flows)})")
+    lines.append("")
+    for f in flows:
+        lines.append(f"### `{f.get('name', '')}` ({f.get('count', 0)})")
+        for m in f.get("members", []):
+            lines.append(_member_line(m))
+        lines.append("")
 
 
 def _md_tags(data: Dict, lines: list) -> None:
