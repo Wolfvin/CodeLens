@@ -63,6 +63,54 @@ _SOURCE_EXTENSIONS: Set[str] = {
 # Cap on enumerated file lists; counts stay exact.
 _LIST_CAP = 200
 
+# Broad, language-agnostic declaration pattern — captures the symbol name from
+# a keyword-style definition (py/rust/go/ts/java/php/c...) or a JS-style
+# `const foo =` / `foo(...) {`. Used only to attribute a @FLOW tag to the
+# nearest enclosing symbol; a miss falls back to the file, so it never has to
+# be exhaustive.
+_DEF_RE = re.compile(
+    r"^[ \t]*(?:export\s+|public\s+|private\s+|protected\s+|static\s+|async\s+|"
+    r"final\s+|pub\s+)*"
+    r"(?:def|fn|func|function|class|struct|interface|type|impl|trait)\s+(\w+)"
+)
+_JS_DEF_RE = re.compile(
+    r"^[ \t]*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=|"
+    r"^[ \t]*(\w+)\s*\([^)]*\)\s*(?:\{|=>|:)"
+)
+
+
+def _symbol_at(line: str) -> str:
+    """Return the symbol declared on ``line``, or '' if it declares none."""
+    m = _DEF_RE.match(line)
+    if m:
+        return m.group(1)
+    m = _JS_DEF_RE.match(line)
+    if m:
+        return m.group(1) or m.group(2) or ""
+    return ""
+
+
+# How many lines below a tag to scan for a `comment-above-def` declaration.
+_LOOKAHEAD = 3
+
+
+def _lookahead_symbol(lines, idx: int) -> str:
+    """Symbol declared just below line ``idx`` (a comment-above-def), or ''.
+
+    Only contiguous comment lines may sit between the tag and the declaration.
+    A blank line ends the run: it separates a file-header tag (blank, then an
+    unrelated first declaration) from a genuine comment-above-def, and a
+    docstring tag (whose following lines are code) never reaches a def.
+    """
+    for j in range(idx + 1, min(idx + 1 + _LOOKAHEAD, len(lines))):
+        stripped = lines[j].strip()
+        sym = _symbol_at(lines[j])
+        if sym:
+            return sym
+        if not stripped or not stripped.startswith(("//", "#", "*", "/*", '"""', "'''")):
+            break  # blank line or real code before a def — not comment-above-def
+    return ""
+
 
 def _flow_name(raw: str) -> str:
     """The flow name is the first whitespace-delimited token of an @FLOW value.
@@ -89,8 +137,15 @@ class TagAuditEngine(BaseEngine):
         header_present: Set[str] = set()
         # Normalise separators so keys match across OSes (Windows scan, Linux CI).
         rel = rel_path.replace("\\", "/")
+        source_lines = content.splitlines()
+        last_symbol = ""  # nearest declaration seen while scanning down the file
 
-        for lineno, line in enumerate(content.splitlines(), start=1):
+        for idx, line in enumerate(source_lines):
+            lineno = idx + 1
+            symbol = _symbol_at(line)
+            if symbol:
+                last_symbol = symbol
+
             m = _TAG_RE.search(line)
             if not m:
                 continue
@@ -100,7 +155,16 @@ class TagAuditEngine(BaseEngine):
             elif tag == "FLOW":
                 name = _flow_name(value)
                 if name:
-                    self._flows.setdefault(name, []).append(f"{rel}:{lineno}")
+                    # Attribute the flow to a function. A comment-above-def
+                    # (`// @FLOW` then the declaration) is the most specific, so
+                    # look a few lines down first; otherwise fall back to the
+                    # enclosing def seen above (docstring case); a tag with
+                    # neither (file header) attributes to the file itself.
+                    self._flows.setdefault(name, []).append({
+                        "symbol": _lookahead_symbol(source_lines, idx) or last_symbol,
+                        "file": rel,
+                        "line": lineno,
+                    })
 
         if not header_present:
             self._untagged.append(rel)
@@ -117,10 +181,17 @@ class TagAuditEngine(BaseEngine):
         return []
 
     def _build_result(self, workspace: str) -> Dict[str, Any]:
-        flows = [
-            {"name": name, "count": len(locs), "locations": sorted(locs)}
-            for name, locs in sorted(self._flows.items())
-        ]
+        flows = []
+        for name, members in sorted(self._flows.items()):
+            ordered = sorted(members, key=lambda m: (m["file"], m["line"]))
+            flows.append({
+                "name": name,
+                "count": len(ordered),
+                # Members carry the enclosing symbol; locations stays for
+                # backward compat (tag-audit consumers + ai item extraction).
+                "members": ordered,
+                "locations": [f"{m['file']}:{m['line']}" for m in ordered],
+            })
         partial = sorted(self._partial_header, key=lambda d: d["file"])
         untagged = sorted(self._untagged)
         scanned = self._files_scanned

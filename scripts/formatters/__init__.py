@@ -121,7 +121,7 @@ def _normalize_to_ai(data: Any, command: str = "") -> Dict[str, Any]:
     _ITEM_KEYS = [
         "functions", "findings", "leaks", "hints", "issues",
         "matches", "violations", "entrypoints", "routes", "stores",
-        "results", "ownership_summary", "chains", "flows",
+        "results", "ownership_summary", "chains", "flows", "members",
         "by_category", "top_priority", "actionable_items",
     ]
 
