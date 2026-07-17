@@ -32,6 +32,7 @@ permissions:
 jobs:
   refresh-vuln-db:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Only run on the main repo (not forks). Schedule triggers on forks
     # are disabled by GitHub anyway, but this guards workflow_dispatch.
     if: github.repository == 'Wolfvin/CodeLens'

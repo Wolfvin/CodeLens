@@ -49,6 +49,7 @@ jobs:
   build-and-push:
     name: Build & Push ${{ matrix.variant }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: github.repository == 'Wolfvin/CodeLens'
     strategy:
       fail-fast: false
