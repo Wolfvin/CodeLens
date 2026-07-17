@@ -1155,12 +1155,13 @@ def _md_diff(data: Dict, lines: list) -> None:
         removed = be.get("removed_count", 0)
         changed = be.get("changed_count", 0)
         lines.append(f"### Backend — +{added} / -{removed} / ~{changed}")
+        # `name`, not `fn`: _diff_backend() renames the field on the way out.
         for node in be.get("added_nodes", [])[:5]:
-            lines.append(f"- + `{node.get('fn', '')}` ({node.get('file', '')})")
+            lines.append(f"- + `{node.get('name', '')}` ({node.get('file', '')})")
         for node in be.get("removed_nodes", [])[:5]:
-            lines.append(f"- - `{node.get('fn', '')}`")
+            lines.append(f"- - `{node.get('name', '')}`")
         for node in be.get("changed_nodes", [])[:5]:
-            lines.append(f"- ~ `{node.get('fn', '')}`")
+            lines.append(f"- ~ `{node.get('name', '')}`")
         if be.get("new_dead"):
             lines.append(f"- **New dead:** {len(be['new_dead'])}")
         lines.append("")
