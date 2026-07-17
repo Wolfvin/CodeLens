@@ -12,6 +12,21 @@ def to_markdown(data: Any, command: str = "") -> str:
     lines = []
     status = data.get("status", "")
 
+    # Umbrella envelope {s, st, r:[...]} (the #195 command consolidation):
+    # unwrap and render each sub-result through its own `_check` handler.
+    # Without this, every umbrella sub-check rendered empty or "Symbol not
+    # found" because the old flat handlers never saw the shape they expect
+    # (issue #306). Recursion reuses every existing per-command renderer.
+    sub_results = data.get("r")
+    if isinstance(sub_results, list) and "st" in data:
+        parts = []
+        for sub in sub_results:
+            if isinstance(sub, dict):
+                rendered = to_markdown(sub, sub.get("_check", "")).strip()
+                if rendered:
+                    parts.append(rendered)
+        return "\n\n".join(parts) if parts else "_No results._"
+
     # Error output
     if status == "error":
         lines.append(f"## Error")
@@ -124,11 +139,57 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_summary(data, lines)
     elif command == "analyze":
         _md_analyze(data, lines)
+    elif command == "tags":
+        _md_tags(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
+
+
+def _md_tags(data: Dict, lines: list) -> None:
+    """Markdown for the doc-tag audit (`context --check tags`, issue #305)."""
+    s = data.get("summary", {})
+    lines.append("## Doc-Tag Audit")
+    lines.append("")
+    lines.append(
+        f"**Header coverage:** {s.get('header_coverage_pct', 0)}% "
+        f"({s.get('with_full_header', 0)} full, "
+        f"{s.get('with_partial_header', 0)} partial, "
+        f"{s.get('without_header', 0)} untagged of "
+        f"{s.get('files_scanned', 0)} files)"
+    )
+    lines.append(f"**Named flows:** {s.get('distinct_flows', 0)}")
+    lines.append("")
+
+    flows = data.get("flows", [])
+    if flows:
+        lines.append("### Flows")
+        for f in flows:
+            locs = f.get("locations", [])
+            where = locs[0] if locs else ""
+            extra = f" (+{len(locs) - 1} more)" if len(locs) > 1 else ""
+            lines.append(f"- `{f.get('name', '')}` — {where}{extra}")
+        lines.append("")
+
+    partial = data.get("partial_headers", [])
+    if partial:
+        lines.append("### Partial headers (missing tags)")
+        for p in partial:
+            lines.append(f"- `{p.get('file', '')}` — missing {', '.join(p.get('missing', []))}")
+        if data.get("partial_headers_truncated"):
+            lines.append("- …")
+        lines.append("")
+
+    untagged = data.get("untagged_files", [])
+    if untagged:
+        lines.append(f"### Untagged files ({s.get('without_header', 0)})")
+        for u in untagged:
+            lines.append(f"- `{u}`")
+        if data.get("untagged_files_truncated"):
+            lines.append("- …")
+        lines.append("")
 
 
 def _md_generic(data: Dict, lines: list) -> None:
