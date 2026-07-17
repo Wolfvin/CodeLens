@@ -16,6 +16,7 @@ jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -37,20 +38,26 @@ jobs:
           # and causes a native use-after-free SIGSEGV in tree_sitter_python._binding
           # even on shallow files (issue #235). python_parser.py's keep_alive
           # mitigation is insufficient for 0.26; 0.25.x is known-safe.
-          pip install "tree-sitter>=0.21.0,<0.26" pyyaml pytest pytest-cov pygls lsprotocol
+          # pytest-timeout: names the hanging test instead of letting the job
+          # burn the 6h ceiling in silence (issue #303).
+          pip install "tree-sitter>=0.21.0,<0.26" pyyaml pytest pytest-cov pytest-timeout pygls lsprotocol
           # Install optional grammar packages for full parser coverage
           pip install tree-sitter-python tree-sitter-javascript tree-sitter-html tree-sitter-css || true
           pip install tree-sitter-typescript tree-sitter-rust || true
 
       - name: Run test suite
         run: |
+          # --timeout: the whole suite runs in ~160s locally, so any single
+          # test past 120s is stuck, not slow. `thread` method dumps its stack.
           cd scripts && python -m pytest ../tests/ -v --tb=short \
+            --timeout=120 --timeout-method=thread \
             --ignore=../tests/test_integration.py
 
   # ─── Benchmark ─────────────────────────────────────────────────
   benchmark:
     name: Quick Benchmark
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
 
     steps:
@@ -81,6 +88,7 @@ jobs:
   self-check:
     name: CodeLens Self-Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: test
 
     steps:
@@ -125,6 +133,7 @@ jobs:
   upload-sarif:
     name: Upload SARIF to Code Scanning
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: self-check
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
