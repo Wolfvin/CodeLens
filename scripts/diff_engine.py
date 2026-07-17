@@ -446,9 +446,11 @@ def _diff_backend(old: Dict, new: Dict) -> Dict:
         "removed_edges_truncated": removed_truncated,
         "added_edge_count": len(added_edge_pairs),
         "removed_edge_count": len(removed_edge_pairs),
+        # `before`/`after`, not `from`/`to`: those already mean an edge's
+        # endpoints here, and reusing them for snapshot sides reads as a bug.
         "unresolved_edges": {
-            "from": old_unresolved,
-            "to": new_unresolved,
+            "before": old_unresolved,
+            "after": new_unresolved,
             "delta": new_unresolved - old_unresolved
         }
     }

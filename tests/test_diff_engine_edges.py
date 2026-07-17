@@ -194,7 +194,7 @@ def test_unresolved_edges_are_counted_not_enumerated():
 
     assert result["added_edges"] == []
     assert result["added_edge_count"] == 0
-    assert result["unresolved_edges"] == {"from": 0, "to": 2, "delta": 2}
+    assert result["unresolved_edges"] == {"before": 0, "after": 2, "delta": 2}
 
 
 def test_split_edges_partitions_resolved_and_unresolved():
@@ -236,7 +236,7 @@ def test_missing_edges_key_does_not_crash():
 
     assert result["added_edge_count"] == 0
     assert result["removed_edge_count"] == 0
-    assert result["unresolved_edges"] == {"from": 0, "to": 0, "delta": 0}
+    assert result["unresolved_edges"] == {"before": 0, "after": 0, "delta": 0}
 
 
 def test_legacy_node_fields_are_unchanged():
