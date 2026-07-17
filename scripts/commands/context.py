@@ -58,6 +58,10 @@ _CHECKS = {
         "module": "commands.symbols_overview",
         "help": "Token-efficient hierarchical symbols map from registry (issue #254)",
     },
+    "tags": {
+        "module": "commands.tags",
+        "help": "Audit @FLOW/@ENTRY/@PART doc-tags: flow inventory, header coverage, untagged files (issue #305)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -74,6 +78,7 @@ def add_args(parser):
         "  orient      10-second codebase orientation brief\n"
         "  diagnostics LSP lint/errors/warnings for a file (needs --file, issue #253)\n"
         "  overview    Token-efficient hierarchical symbols map (issue #254)\n"
+        "  tags        Audit @FLOW/@ENTRY/@PART doc-tags (issue #305)\n"
         "\n"
         "Examples:\n"
         "  codelens context .                                  # orient (default)\n"
@@ -83,6 +88,7 @@ def add_args(parser):
         "  codelens context . --check diagnostics --file src/app.ts\n"
         "  codelens context . --check overview                 # workspace symbol map\n"
         "  codelens context . --check overview --file src/auth.ts\n"
+        "  codelens context . --check tags                     # doc-tag audit\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
                         help="Path to workspace root (auto-detected if omitted)")

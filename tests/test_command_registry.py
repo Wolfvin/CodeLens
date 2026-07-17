@@ -45,7 +45,7 @@ def test_every_command_module_registers():
         "export_snapshot", "git_status", "graph_schema", "import_snapshot",
         "init", "lsp_status", "orient", "outline", "ownership", "perf_hint",
         "query_graph", "regex_audit", "secrets", "side_effect", "smell",
-        "staleness", "symbols_overview", "taint", "trace", "vuln_scan",
+        "staleness", "symbols_overview", "tags", "taint", "trace", "vuln_scan",
     }
     _UTILITY_MODULES |= _DEPRECATED_ALIAS_MODULES
     missing = []
