@@ -1142,6 +1142,14 @@ def main():
              "and exit. Single source of truth for issue #38 reconciliation. "
              "Hidden commands are excluded (issues #195/#199/#200).",
     )
+    parser.add_argument(
+        "--guide",
+        action="store_true",
+        default=False,
+        help="Print a task-oriented usage guide for agents (task→command map, "
+             "conventions, live sub-checks) and exit. Add --format json for a "
+             "machine-parseable form.",
+    )
     subparsers = parser.add_subparsers(
         dest="command",
         parser_class=_StdoutErrorParser,
@@ -1275,6 +1283,19 @@ def main():
     # the full --help output.
     if "--command-count" in sys.argv:
         print(_command_count)
+        sys.exit(0)
+
+    # Handle --guide as a top-level flag (issue #319): a task-oriented usage
+    # guide for agents. Respects --format so agents can request JSON.
+    if "--guide" in sys.argv:
+        from agent_guide import build_guide
+        fmt = _argv_format(sys.argv) or "text"
+        guide = build_guide(fmt)
+        if isinstance(guide, dict):
+            import json as _json
+            print(_json.dumps(guide, indent=2))
+        else:
+            print(guide)
         sys.exit(0)
 
     # Pre-parse to capture global flags before subparser overwrites them
