@@ -86,7 +86,7 @@ class TestHybridIntegration:
     def test_lsp_status_cli(self):
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"), "--lsp-status"],
-            capture_output=True, text=True, cwd=CODELENS_ROOT
+            capture_output=True, text=True, cwd=CODELENS_ROOT, timeout=60
         )
         combined = result.stdout + result.stderr
         assert "pyright" in combined or result.returncode == 0
@@ -95,7 +95,7 @@ class TestHybridIntegration:
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
              "query", "detect_dead_code", CODELENS_ROOT, "--format", "json"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=60
         )
         idx = result.stdout.find("{")
         if idx >= 0:
@@ -104,27 +104,31 @@ class TestHybridIntegration:
             assert data["confidence"] in ("high", "medium", "low")
 
     def test_impact_confidence_without_deep(self):
+        # Post-#195 umbrella form: `impact <ws> --name X` (was `impact X <ws>`,
+        # which errors — the old form left stdout empty so this test passed
+        # vacuously until #315 surfaced the error on stdout).
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-             "impact", "detect_dead_code", CODELENS_ROOT, "--format", "json"],
-            capture_output=True, text=True
+             "impact", CODELENS_ROOT, "--name", "detect_dead_code", "--format", "json"],
+            capture_output=True, text=True, timeout=60,
         )
         idx = result.stdout.find("{")
-        if idx >= 0:
-            data = json.loads(result.stdout[idx:])
-            assert "confidence" in data
+        assert idx >= 0, result.stdout + result.stderr
+        data = json.loads(result.stdout[idx:])
+        assert "confidence" in data["r"][0]
 
     def test_ai_format_confidence_distribution(self):
+        # Post-#195: `audit --check dead-code` (was the dropped `dead-code`
+        # top-level command). ai stats are namespaced per check (#306).
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-             "dead-code", CODELENS_ROOT, "--format", "ai", "--top", "5"],
-            capture_output=True, text=True
+             "audit", CODELENS_ROOT, "--check", "dead-code", "--format", "ai", "--top", "5"],
+            capture_output=True, text=True, timeout=60,
         )
         idx = result.stdout.find("{")
-        if idx >= 0:
-            data = json.loads(result.stdout[idx:])
-            stats = data.get("stats", {})
-            assert "confidence_distribution" in stats
+        assert idx >= 0, result.stdout + result.stderr
+        data = json.loads(result.stdout[idx:])
+        assert "confidence_distribution" in data["stats"]["dead-code"]
 
     def test_deep_with_pyright(self):
         from lsp_client import detect_available_servers
@@ -134,7 +138,7 @@ class TestHybridIntegration:
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
              "query", "detect_dead_code", CODELENS_ROOT, "--deep", "--format", "json"],
-            capture_output=True, text=True
+            capture_output=True, text=True, timeout=60
         )
         idx = result.stdout.find("{")
         if idx >= 0:
@@ -143,23 +147,25 @@ class TestHybridIntegration:
             assert data.get("lsp_active") is True
 
     def test_dead_code_confidence_fields(self):
+        # Post-#195: `audit --check dead-code`; results live under the sub-check
+        # envelope r[0].
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
-             "dead-code", CODELENS_ROOT, "--format", "json", "--top", "5"],
-            capture_output=True, text=True
+             "audit", CODELENS_ROOT, "--check", "dead-code", "--format", "json", "--top", "5"],
+            capture_output=True, text=True, timeout=60,
         )
         idx = result.stdout.find("{")
-        if idx >= 0:
-            data = json.loads(result.stdout[idx:])
-            results = data.get("results", {})
-            found_confidence = False
-            for cat, items in results.items():
-                if isinstance(items, list):
-                    for item in items[:3]:
-                        if isinstance(item, dict) and "confidence" in item:
-                            found_confidence = True
-                            break
-            assert found_confidence
+        assert idx >= 0, result.stdout + result.stderr
+        data = json.loads(result.stdout[idx:])
+        results = data["r"][0].get("results", {})
+        found_confidence = False
+        for cat, items in results.items():
+            if isinstance(items, list):
+                for item in items[:3]:
+                    if isinstance(item, dict) and "confidence" in item:
+                        found_confidence = True
+                        break
+        assert found_confidence
 
     def test_deep_graceful_degradation(self):
         import tempfile
@@ -171,7 +177,7 @@ class TestHybridIntegration:
             result = subprocess.run(
                 [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
                  "audit", tmpdir, "--check", "dead-code", "--deep"],
-                capture_output=True, text=True
+                capture_output=True, text=True, timeout=60
             )
             assert result.returncode == 0
 
