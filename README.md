@@ -114,7 +114,7 @@ CodeLens consolidates what used to be ~78 separate commands into **12 umbrella c
 | `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css · a11y (default: all) | Code quality. `dead-code` cross-checked against `context --check trace` before you trust it. `css` = deep CSS analysis, `a11y` = WCAG 2.1 accessibility. |
 | `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) | Hardcoded secrets, CVE/OSV dependency scanning, AST taint analysis, ReDoS. **Taint is Python/JS/TS/TSX only** — no Rust source/sink rules yet. |
 | `summary` | summary (default) · dashboard · arch-metrics · architecture | Prioritized, anti-overload findings digest. Use `--lite` — it's designed to still be big without it. |
-| `impact` | impact (default) · diff · dataflow | Blast-radius analysis before you touch something. |
+| `impact` | impact (default) · diff · dataflow · flow-diff | Blast-radius analysis before you touch something; `flow-diff --name X` shows whether a named `@FLOW`'s shape changed between two snapshots. |
 | `api-map` | api-map (default) · graph-schema | HTTP/IPC route inventory, auth-middleware coverage, cheap graph-shape introspection. |
 | `doctor` | doctor (default) · env-check · lsp-status | Environment/dependency health check. |
 | `history` | history (default) · ownership · git-status | Trend tracking across scans, git blame ownership, scan staleness vs. HEAD. |
