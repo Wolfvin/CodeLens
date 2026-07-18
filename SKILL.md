@@ -43,7 +43,7 @@ codelens guard --pre --file X           →  DROPPED
 |---|---|
 | `scan` | scan (default) · rescan |
 | `search` | semantic (default) · symbol · regex · graph — **`pattern` comes first, workspace second**, opposite of every other command here |
-| `context` | orient (default) · outline · trace · context · diagnostics (LSP lint, needs `--file`) · overview (token-efficient symbol map) · tags (`@FLOW`/`@ENTRY` doc-tag audit) · flow (collect a named `@FLOW`'s scattered functions, `--name X`) |
+| `context` | orient (default) · outline · trace · context · diagnostics (LSP lint, needs `--file`) · overview (token-efficient symbol map) · tags (`@FLOW`/`@ENTRY` doc-tag audit) · flow (collect a named `@FLOW`'s scattered functions, `--name X`) · source (a function's source by name, `--name X` — skip reading the whole file) |
 | `deps` | affected · dependents · circular (default: all three) · import-snapshot · export-snapshot |
 | `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css (deep CSS) · a11y (WCAG 2.1) (default: all) |
 | `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) |
