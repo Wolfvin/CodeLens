@@ -42,7 +42,7 @@ def test_every_command_module_registers():
         "a11y", "affected", "arch_metrics", "architecture", "binary_scan",
         "circular", "complexity", "css_deep", "dashboard", "dataflow",
         "dead_code", "dependents", "diagnostics", "diff", "env_check",
-        "export_snapshot", "flow", "git_status", "graph_schema", "import_snapshot",
+        "export_snapshot", "flow", "flow_diff", "git_status", "graph_schema", "import_snapshot",
         "init", "lsp_status", "orient", "outline", "ownership", "perf_hint",
         "query_graph", "regex_audit", "secrets", "side_effect", "smell",
         "staleness", "symbols_overview", "tags", "taint", "trace", "vuln_scan",

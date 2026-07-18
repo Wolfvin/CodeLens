@@ -143,11 +143,42 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_tags(data, lines)
     elif command == "flow":
         _md_flow(data, lines)
+    elif command == "flow-diff":
+        _md_flow_diff(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
+
+
+def _md_flow_diff(data: Dict, lines: list) -> None:
+    """Markdown for a named flow's shape change (`flow-diff`, issue #313)."""
+    name = data.get("flow", "")
+    if not data.get("found"):
+        lines.append(f"## Flow-diff: `{name}` — not found")
+        lines.append("")
+        lines.append(data.get("message", ""))
+        return
+
+    added = data.get("added_edges", [])
+    removed = data.get("removed_edges", [])
+    s1, s2 = data.get("snapshot_1", "?"), data.get("snapshot_2", "?")
+    lines.append(f"## Flow-diff: `{name}`  ({s1} → {s2})")
+    lines.append("")
+    if not added and not removed:
+        lines.append("_No shape change — the flow's internal call-edges are unchanged._")
+        return
+    if removed:
+        lines.append("### Removed edges")
+        for e in removed:
+            lines.append(f"- `{e.get('from', '')}` → `{e.get('to', '')}`")
+        lines.append("")
+    if added:
+        lines.append("### Added edges")
+        for e in added:
+            lines.append(f"- `{e.get('from', '')}` → `{e.get('to', '')}`")
+        lines.append("")
 
 
 def _md_flow(data: Dict, lines: list) -> None:

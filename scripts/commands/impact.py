@@ -40,6 +40,10 @@ _CHECKS = {
         "module": "commands.dataflow",
         "help": "Trace data flow source→sink with cross-file call graph",
     },
+    "flow-diff": {
+        "module": "commands.flow_diff",
+        "help": "Did a named @FLOW's shape change between two snapshots (--name X; issue #313)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -53,10 +57,12 @@ def add_args(parser):
         "  impact    Analyze change impact for a symbol (default)\n"
         "  diff      Compare registry snapshots (--git-aware for git-diff delta)\n"
         "  dataflow  Trace data flow source→sink with cross-file call graph\n"
+        "  flow-diff Did a named @FLOW's shape change between two snapshots (--name X, issue #313)\n"
         "\n"
         "Examples:\n"
         "  codelens impact . --name handleAuth              # impact (default)\n"
         "  codelens impact . --check diff --git-aware\n"
+        "  codelens impact . --check flow-diff --name PAYMENT\n"
         "  codelens impact . --check dataflow --source src/api.ts --sink db.query\n"
     )
     parser.add_argument("workspace", nargs="?", default=None,
@@ -194,6 +200,10 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.snapshot2 = getattr(base_args, "snapshot2", None)
         ns.list_snapshots = getattr(base_args, "list_snapshots", False)
         ns.git_aware = getattr(base_args, "git_aware", False)
+    elif check_name == "flow-diff":
+        ns.name = getattr(base_args, "name", None)
+        ns.snapshot1 = getattr(base_args, "snapshot1", None)
+        ns.snapshot2 = getattr(base_args, "snapshot2", None)
     elif check_name == "dataflow":
         ns.source = getattr(base_args, "source", None)
         ns.sink = getattr(base_args, "sink", None)

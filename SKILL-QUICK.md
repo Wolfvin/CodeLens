@@ -110,7 +110,7 @@ codelens search "pattern" . --mode regex --limit 5 --offset 10 --format compact
 | `audit [workspace]` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css · a11y |
 | `security [workspace]` | secrets · vuln-scan · taint · binary-scan · regex-audit |
 | `summary [workspace]` | summary (default) · dashboard · arch-metrics · architecture |
-| `impact [workspace]` | impact (`--name X`, default) · diff · dataflow |
+| `impact [workspace]` | impact (`--name X`, default) · diff · dataflow · flow-diff (`--name X`, named `@FLOW` shape change) |
 | `api-map [workspace]` | api-map (default) · graph-schema |
 | `doctor [workspace]` | doctor (default) · env-check · lsp-status |
 | `history [workspace]` | history (default) · ownership · git-status |

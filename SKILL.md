@@ -48,7 +48,7 @@ codelens guard --pre --file X           →  DROPPED
 | `audit` | dead-code · complexity · smell · staleness · perf-hint · side-effect · css (deep CSS) · a11y (WCAG 2.1) (default: all) |
 | `security` | secrets · vuln-scan · taint · binary-scan · regex-audit (default: all) |
 | `summary` | summary (default) · dashboard · arch-metrics · architecture |
-| `impact` | impact (default) · diff · dataflow |
+| `impact` | impact (default) · diff · dataflow · flow-diff (named `@FLOW` shape change between two snapshots, `--name X`) |
 | `api-map` | api-map (default) · graph-schema |
 | `doctor` | doctor (default) · env-check · lsp-status |
 | `history` | history (default) · ownership · git-status |
