@@ -91,6 +91,14 @@ class TestHybridIntegration:
         combined = result.stdout + result.stderr
         assert "pyright" in combined or result.returncode == 0
 
+    @pytest.mark.skip(reason=(
+        "The `query` hidden command triggers LSP initialisation that hangs on "
+        "headless CI (issue #303) — the single test that made every CI run burn "
+        "the 6h ceiling. Its assertion (confidence present without --deep) is "
+        "already covered by test_impact_confidence_without_deep via the `impact` "
+        "umbrella, which does not touch LSP. Re-enable if `query` is kept and "
+        "made LSP-safe when the 13 hidden commands are resolved (issue #200)."
+    ))
     def test_query_confidence_without_deep(self):
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, "codelens.py"),
@@ -130,6 +138,10 @@ class TestHybridIntegration:
         data = json.loads(result.stdout[idx:])
         assert "confidence_distribution" in data["stats"]["dead-code"]
 
+    @pytest.mark.skip(reason=(
+        "Uses the `query` hidden command, whose LSP init hangs on headless CI "
+        "(issue #303). Re-enable when `query` is resolved (issue #200)."
+    ))
     def test_deep_with_pyright(self):
         from lsp_client import detect_available_servers
         servers = detect_available_servers()
