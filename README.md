@@ -72,6 +72,8 @@ codelens context
 
 ### Zero-config for AI agents
 
+**New here? Run `codelens --guide` first** (add `--format json` for a machine-parseable form). It prints a task→command map with copy-paste examples and the positional conventions, so an agent knows exactly what to run without guessing.
+
 If no `.codelens/` registry exists yet, any analysis command auto-runs `scan` first — no separate init step required:
 
 ```bash
