@@ -1076,6 +1076,41 @@ def _check_staleness(workspace: str, args) -> Optional[Dict[str, Any]]:
 
 # ─── CLI Entry Point ──────────────────────────────────────────
 
+# Formats an agent parses off stdout. For these, a CLI arg error must appear
+# on stdout as JSON — not on stderr with an empty stdout, which reads as
+# "no results" and silently misleads the agent (issue #315).
+_MACHINE_FORMATS = frozenset({
+    "json", "compact", "ai", "sarif", "graphml", "junit-xml", "gitlab-sast",
+})
+
+
+def _argv_format(argv):
+    """The --format value from a raw argv, or None."""
+    for i, a in enumerate(argv):
+        if a == "--format" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--format="):
+            return a.split("=", 1)[1]
+    return None
+
+
+class _StdoutErrorParser(argparse.ArgumentParser):
+    """ArgumentParser that reports arg errors on stdout as JSON for machine
+    formats, so an agent can always tell an error from an empty result."""
+
+    def error(self, message):
+        if _argv_format(sys.argv) in _MACHINE_FORMATS:
+            import json as _json
+            print(_json.dumps({
+                "s": "error",
+                "error": message,
+                "error_type": "cli_argument",
+                "usage": self.format_usage().strip(),
+            }))
+            self.exit(2)
+        super().error(message)
+
+
 def main():
     # Command count is derived from the visible (non-hidden) command set at
     # runtime so it can never drift from the actual number of umbrella
@@ -1090,7 +1125,7 @@ def main():
     _visible_registry = _get_visible_commands()
     _command_count = len(_visible_registry)
 
-    parser = argparse.ArgumentParser(
+    parser = _StdoutErrorParser(
         description=(
             f"CodeLens v{CODELENS_VERSION} — Live Codebase Reference Intelligence "
             f"(Tree-sitter Edition). {_command_count} commands available; run "
@@ -1109,6 +1144,7 @@ def main():
     )
     subparsers = parser.add_subparsers(
         dest="command",
+        parser_class=_StdoutErrorParser,
         help="Available commands",
         # Issue #195: the default metavar lists every choice including
         # hidden commands. Override with only the 12 visible umbrella
