@@ -44,7 +44,7 @@ def test_every_command_module_registers():
         "dead_code", "dependents", "diagnostics", "diff", "env_check",
         "export_snapshot", "flow", "flow_diff", "git_status", "graph_schema", "import_snapshot",
         "init", "lsp_status", "orient", "outline", "ownership", "perf_hint",
-        "query_graph", "regex_audit", "secrets", "side_effect", "smell",
+        "query_graph", "regex_audit", "secrets", "side_effect", "smell", "source",
         "staleness", "symbols_overview", "tags", "taint", "trace", "vuln_scan",
     }
     _UTILITY_MODULES |= _DEPRECATED_ALIAS_MODULES

@@ -145,11 +145,33 @@ def to_markdown(data: Any, command: str = "") -> str:
         _md_flow(data, lines)
     elif command == "flow-diff":
         _md_flow_diff(data, lines)
+    elif command == "source":
+        _md_source(data, lines)
     else:
         # Generic markdown for any command
         _md_generic(data, lines)
 
     return "\n".join(lines)
+
+
+def _md_source(data: Dict, lines: list) -> None:
+    """Markdown for a function's source (`context --check source`, issue #316)."""
+    name = data.get("symbol", "")
+    if not data.get("found"):
+        lines.append(f"## Source: `{name}` — not found")
+        lines.append("")
+        lines.append(data.get("message", ""))
+        return
+    matches = data.get("matches", [])
+    plural = "" if len(matches) == 1 else f" ({len(matches)} definitions)"
+    lines.append(f"## Source: `{name}`{plural}")
+    for m in matches:
+        lines.append("")
+        lines.append(f"**{m.get('file', '')}:{m.get('start_line', '')}-{m.get('end_line', '')}**")
+        lines.append("")
+        lines.append("```")
+        lines.append(m.get("source", ""))
+        lines.append("```")
 
 
 def _md_flow_diff(data: Dict, lines: list) -> None:

@@ -66,6 +66,10 @@ _CHECKS = {
         "module": "commands.flow",
         "help": "Collect a named @FLOW's scattered functions into one view (--name X; issue #309)",
     },
+    "source": {
+        "module": "commands.source",
+        "help": "Return a function's source by name — no need to read the whole file (--name X; issue #316)",
+    },
 }
 
 ALL_CHECKS = list(_CHECKS.keys())
@@ -84,6 +88,7 @@ def add_args(parser):
         "  overview    Token-efficient hierarchical symbols map (issue #254)\n"
         "  tags        Audit @FLOW/@ENTRY/@PART doc-tags (issue #305)\n"
         "  flow        Collect a named @FLOW's scattered functions (--name X, issue #309)\n"
+        "  source      Return a function's source by name (--name X, issue #316)\n"
         "\n"
         "Examples:\n"
         "  codelens context .                                  # orient (default)\n"
@@ -187,6 +192,9 @@ def _build_namespace(base_args, check_name: str) -> argparse.Namespace:
         ns.max_files = getattr(base_args, "max_files", None) or 200
     elif check_name == "flow":
         ns.name = getattr(base_args, "name", None)
+    elif check_name == "source":
+        ns.name = getattr(base_args, "name", None)
+        ns.file = getattr(base_args, "file", None)
     return ns
 
 
